@@ -1,95 +1,122 @@
 # me-shower
 
-`me-shower` は、職務経歴書を長く育てるためのフレームAIエージェント用リポジトリです。
+職務経歴書の原本管理と提出用PDF生成を分離して運用するためのワークスペースです。
 
-YAMLで経歴・スキル・プロジェクトを管理し、Jinja2でMarkdownを生成し、Markdown + CSS + WeasyPrintで提出用PDFを作ります。公開リポジトリで扱いやすいよう、このリポジトリには架空のサンプルデータだけを含めています。
+- ルートディレクトリ: 原本、運用ルール、エージェント指示を置く
+- `app/`: YAMLからMarkdown/PDFを生成するCLIアプリ本体
 
-## 目的
+原本Excelは参考テンプレートとして扱い、成果物は `app/generated/職務経歴書.pdf` とします。
 
-- 職務経歴書の内容を構造化して管理する
-- Markdownを中間成果物として残し、差分を追いやすくする
-- CSSテーマを差し替えて、応募先に合わせたPDFを生成する
-- 発行履歴を `CHANGELOG.md` に残し、いつ・どんな内容で発行したかを管理する
+## ディレクトリ構成
+
+```text
+me-shower/
+  AGENTS.md
+  README.md
+  .codex/
+  職務経歴書原本.xlsx
+  app/
+    pyproject.toml
+    src/
+    templates/
+    data/
+    tests/
+    generated/
+    uv.lock
+```
+
+## 実行場所
+
+各種コマンドは `app/` 配下で実行します。
+
+```bash
+cd app
+```
 
 ## セットアップ
 
 ```bash
+cd app
 uv sync
 ```
 
-## データ編集
+## よく使うコマンド
 
-サンプルデータは `data/` 配下にあります。実運用では個人情報や実案件情報を扱うため、公開リポジトリへコミットする前に必ず内容を確認してください。
+```bash
+cd app
 
-```text
-data/
-  events/
-  projects/
-  skills/
-  profile.yaml
+# データ概要を確認
+uv run me-shower analyze
+
+# 手動ログを追加
+uv run me-shower add-log --message "職務経歴データを更新"
+
+# Markdownを生成
+uv run me-shower generate-md
+
+# PDFを生成
+uv run me-shower generate-pdf --theme forest
+
+# 発行履歴付きで保存
+uv run me-shower issue --title "初回発行" --note "今日時点のMarkdownを原本として初回PDFを発行" --theme forest
+
+# テスト実行
+uv run --python .venv/bin/python -m pytest
 ```
 
-## ログ追加
+## コマンド説明
+
+### `uv run me-shower analyze`
+
+プロフィール、プロジェクト、スキル、イベントの件数を確認します。
+
+### `uv run me-shower add-log`
 
 ```bash
 uv run me-shower add-log --message "職務経歴データを更新"
 ```
 
-ログは `data/events/` にYAMLとして保存されます。
+ログは `app/data/events/` にYAMLとして保存されます。
 
-## 分析
-
-```bash
-uv run me-shower analyze
-```
-
-プロフィール、プロジェクト、スキル、イベントの件数を確認します。
-
-## Markdown生成
+### `uv run me-shower generate-md`
 
 ```bash
 uv run me-shower generate-md
 ```
 
-`templates/resume.md.j2` と `data/` 配下のYAMLを使い、`generated/resume.md` を生成します。
+`app/templates/resume.md.j2` と `app/data/` 配下のYAMLを使い、`app/generated/resume.md` を生成します。
 
-## PDF生成
+### `uv run me-shower generate-pdf`
 
 ```bash
 uv run me-shower generate-pdf --theme forest
 ```
 
-`generated/resume.md` をMarkdownからHTMLへ変換し、`templates/resume.css` と `templates/themes/forest.css` を適用して `generated/職務経歴書.pdf` を生成します。
+`app/generated/resume.md` をMarkdownからHTMLへ変換し、`app/templates/resume.css` を適用して `app/generated/職務経歴書.pdf` を生成します。
 
-## 経歴書発行
+テーマCSSは `app/templates/themes/` 配下で管理します。現在のテーマは `forest` です。
+
+### `uv run me-shower issue`
 
 ```bash
 uv run me-shower issue --title "初回発行" --note "今日時点のMarkdownを原本として初回PDFを発行" --theme forest
 ```
 
-`issue` は最新のMarkdownとPDFを生成し、発行版として `generated/releases/` 配下に保存します。発行履歴は `CHANGELOG.md` に追記されます。
+`issue` は最新のMarkdownとPDFを生成し、発行版として `app/generated/releases/` 配下に保存します。
 
-## テーマ
+保存例:
 
-テーマCSSは `templates/themes/` 配下で管理します。現在のテーマは `forest` です。
-
-CSSを編集すれば、余白、フォント、見出し、表、色、ページ区切りなどPDFの見た目を変更できます。
-
-## 公開リポジトリ運用の注意
-
-このリポジトリは公開前提です。以下はコミットしないでください。
-
-- 実名や連絡先などの本人識別情報
-- 実案件名、会社名、顧客名、機密情報
-- 生成済みPDF、Markdown、発行履歴
-- 原本Excel、スクリーンショット、添付画像
-
-## 確認コマンド
-
-```bash
-uv sync
-uv run me-shower analyze
-uv run me-shower generate-md
-uv run me-shower generate-pdf --theme forest
-uv run pytest
+```text
+app/generated/releases/2026-07-07_初回発行/resume.md
+app/generated/releases/2026-07-07_初回発行/職務経歴書.pdf
 ```
+
+発行履歴は `CHANGELOG.md` に追記されます。`CHANGELOG.md` には、発行物、発行理由、生成内容サマリー、ルールベースのフィードバックエージェント結果、次回改善ポイントが残ります。
+
+### `uv run --python .venv/bin/python -m pytest`
+
+テストを実行します。現時点ではこの環境で `uv run pytest` が不安定なため、仮想環境のPython経由で実行します。
+
+## 見た目の変更
+
+PDFの余白、フォント、見出し、表、ページ区切りは `app/templates/resume.css` で調整できます。色やテーマ固有の値は `app/templates/themes/forest.css` で管理します。

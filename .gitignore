@@ -4,11 +4,10 @@ __pycache__/
 *.egg-info/
 .DS_Store
 
-# Generated resume artifacts can contain personal information.
-generated/
-CHANGELOG.md
+# Local notes and private steering data.
+.codex/
 
-# Do not commit real resume source files or original documents.
+# Original source documents and local reference assets.
 *.pdf
 *.xlsx
 *.xls
@@ -17,6 +16,20 @@ CHANGELOG.md
 *.jpg
 *.jpeg
 
-# Local notes and private steering data.
-.codex/
-tmp/
+# Application local runtime artifacts.
+app/.venv/
+app/.pytest_cache/
+app/src/__pycache__/
+app/tests/__pycache__/
+app/src/*.egg-info/
+app/tmp/
+
+# Generated resume artifacts can contain personal information.
+app/generated/
+app/CHANGELOG.md
+
+# Real resume data must not be committed to the public repository.
+app/data/profile.yaml
+app/data/events/
+app/data/projects/
+app/data/skills/
