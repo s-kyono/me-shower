@@ -5,7 +5,9 @@ __pycache__/
 .DS_Store
 
 # Local notes and private steering data.
-.codex/
+.codex/*
+!.codex/agents/
+!.codex/agents/**
 
 # Original source documents and local reference assets.
 *.pdf

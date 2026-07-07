@@ -25,6 +25,11 @@ me-shower/
     uv.lock
 ```
 
+## 公開対象と非公開対象
+
+- 公開対象: `README.md`, `AGENTS.md`, `app/`, `.codex/agents/`
+- 非公開対象: `.codex/steering_sheets/`, `app/data/`, `app/generated/`, `app/CHANGELOG.md`, 原本Excelや各種ローカル生成物
+
 ## 実行場所
 
 各種コマンドは `app/` 配下で実行します。
