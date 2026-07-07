@@ -1,0 +1,239 @@
+:root {
+  --color-primary: #83934d;
+  --color-dark: #44562f;
+  --color-light: #b7c88d;
+  --color-accent: #e9dfb4;
+  --color-background: #f7f8f2;
+  --color-text: #2f2f2f;
+  --color-border: #d9ddd0;
+  --color-surface: #ffffff;
+  --color-muted: #666;
+  --color-heading-bg: #f4f5ef;
+}
+
+@page {
+  size: A4;
+  margin: 15mm 14mm;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif;
+  font-size: 10pt;
+  line-height: 1.68;
+  letter-spacing: 0;
+}
+
+h1 {
+  margin: 0 0 18px;
+  color: var(--color-text);
+  font-size: 19pt;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+}
+
+h2 {
+  margin: 24px 0 12px;
+  padding: 3px 0 3px 12px;
+  border-left: 6px solid var(--color-primary);
+  color: var(--color-text);
+  font-size: 13pt;
+  font-weight: 700;
+  line-height: 1.35;
+  page-break-after: avoid;
+}
+
+h3 {
+  margin: 14px 0 10px;
+  padding: 7px 10px;
+  background: var(--color-heading-bg);
+  color: var(--color-text);
+  font-size: 11.5pt;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+h4 {
+  margin: 14px 0 7px;
+  color: var(--color-text);
+  font-size: 10.5pt;
+  font-weight: 700;
+}
+
+p {
+  margin: 6px 0 12px;
+}
+
+ul {
+  margin: 5px 0 10px;
+  padding-left: 18px;
+}
+
+li {
+  margin: 0 0 4px;
+}
+
+table {
+  width: 100%;
+  margin: 9px 0 16px;
+  border-collapse: collapse;
+  page-break-inside: avoid;
+}
+
+th,
+td {
+  border: 0.6pt solid var(--color-border);
+  padding: 7px 9px;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+th {
+  background: var(--color-light);
+  color: var(--color-text);
+  font-weight: 700;
+  text-align: center;
+}
+
+td {
+  background: var(--color-surface);
+}
+
+body > table:first-of-type th {
+  width: 28%;
+}
+
+.skill-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 10px 0 14px;
+}
+
+.skill-card {
+  padding: 10px 11px 11px;
+  border: 0.6pt solid var(--color-border);
+  background: var(--color-surface);
+  page-break-inside: avoid;
+}
+
+.skill-card h3 {
+  margin: 0 0 9px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-dark);
+  font-size: 10.5pt;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag {
+  display: inline-block;
+  margin: 0 4px 6px 0;
+  padding: 3px 8px;
+  border: 0.6pt solid var(--color-border);
+  background: var(--color-background);
+  color: var(--color-text);
+  font-size: 9.2pt;
+  line-height: 1.35;
+}
+
+.ai-usage-list {
+  margin: 8px 0 16px;
+  border: 0.6pt solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.ai-usage-item {
+  display: flex;
+  gap: 9px;
+  padding: 8px 10px;
+  border-bottom: 0.6pt solid var(--color-border);
+}
+
+.ai-usage-item:last-child {
+  border-bottom: 0;
+}
+
+.ai-label {
+  flex: 0 0 auto;
+  min-width: 34px;
+  color: var(--color-dark);
+  font-weight: 700;
+}
+
+.project {
+  margin: 18px 0 22px;
+  padding: 12px 13px 14px;
+  border: 0.8pt solid var(--color-border);
+  background: var(--color-surface);
+  page-break-inside: auto;
+  break-inside: auto;
+}
+
+.project h3 {
+  margin-top: 0;
+  border-left: 4px solid var(--color-primary);
+  background: var(--color-heading-bg);
+  page-break-after: avoid;
+}
+
+.project-section {
+  margin-top: 12px;
+  padding-top: 1px;
+  page-break-inside: auto;
+  break-inside: auto;
+}
+
+.project-section h4 {
+  padding-bottom: 3px;
+  border-bottom: 0.6pt solid var(--color-border);
+}
+
+.project-summary-table th,
+.env-table th {
+  width: 24%;
+}
+
+.env-table .ai-env-row td,
+.env-table .version-row td {
+  background: var(--color-background);
+}
+
+.env-table .ai-env-row td:first-child,
+.env-table .version-row td:first-child {
+  color: var(--color-dark);
+  font-weight: 700;
+}
+
+.phase-table {
+  table-layout: fixed;
+  margin-bottom: 2px;
+}
+
+.phase-table th,
+.phase-table td {
+  padding: 7px 5px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.phase-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-primary);
+}

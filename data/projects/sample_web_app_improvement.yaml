@@ -1,0 +1,54 @@
+sort_order: 1
+name: サンプル業務システム改善プロジェクト
+period:
+  from: 2025年01月
+  to: 2025年06月
+role: メンバー
+team_size: 5名
+summary: >
+  社内向け業務システムの画面改善、API改修、運用課題の整理を行うサンプル案件です。
+  実際の企業名、個人名、サービス名、機密情報は含めていません。
+responsibilities:
+  - 既存画面の課題整理と改善案の作成
+  - Reactを用いた画面改修と状態管理の整理
+  - FastAPIを用いたAPI改修とバリデーション追加
+  - レビュー指摘への対応とテスト観点の整理
+achievements:
+  - 入力フォームの導線を見直し、操作手順を削減した
+  - APIエラー時の表示を改善し、問い合わせ時の原因調査をしやすくした
+  - テスト観点を整理し、リリース前確認の属人化を抑えた
+technologies:
+  languages:
+    - Python
+    - TypeScript
+  frameworks:
+    - FastAPI
+    - React
+  db:
+    - PostgreSQL
+  tools:
+    - Docker
+    - GitHub Actions
+    - GitHub
+versions:
+  - Python 3.12
+  - TypeScript 5.x
+  - React 18.x
+  - FastAPI 0.115.x
+  - PostgreSQL 16.x
+ai_usage:
+  - name: ChatGPT
+    enabled: true
+  - name: Codex
+    enabled: true
+phases:
+  requirement: true
+  basic_design: true
+  detail_design: true
+  implementation: true
+  review: true
+  test: true
+  operation: false
+evidence:
+  - type: note
+    value: サンプルデータのため実URLなし

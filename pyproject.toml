@@ -1,0 +1,28 @@
+[project]
+name = "me-shower"
+version = "0.1.0"
+description = "Career resume generator for Markdown and PDF outputs."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "typer>=0.12.0",
+  "pyyaml>=6.0.0",
+  "jinja2>=3.1.0",
+  "markdown-it-py>=3.0.0",
+  "weasyprint>=62.0",
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+me-shower = "main:app"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["main"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

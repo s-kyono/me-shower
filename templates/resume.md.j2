@@ -1,0 +1,169 @@
+# {{ profile.title }}
+
+## 氏名・基本情報
+
+| 項目 | 内容 |
+|---|---|
+| 氏名 | {{ profile.name }} |
+| 現在の職種 | {{ profile.basic_info.current_role }} |
+| 経験 | {{ profile.basic_info.experience }} |
+| 希望職種 | {{ profile.basic_info.desired_role }} |
+| 居住地・勤務可能エリア | {{ profile.basic_info.location }} |
+
+## 職務要約
+
+{{ profile.summary }}
+
+## 活かせる経験・知識・技術
+
+{% for item in profile.strengths %}
+- {{ item }}
+{% endfor %}
+
+## 技術スタック
+
+<div class="skill-grid">
+{% for skill in skills %}
+  <section class="skill-card">
+    <h3>{{ skill.category }}</h3>
+    <div class="tag-list">
+{% for item in skill["items"] %}
+      <span class="tag">{{ item }}</span>
+{% endfor %}
+    </div>
+  </section>
+{% endfor %}
+</div>
+
+## AI活用経験
+
+<div class="ai-usage-list">
+{% for item in profile.ai_usage %}
+  <div class="ai-usage-item">
+    <span class="ai-label">活用</span>
+    <span>{{ item }}</span>
+  </div>
+{% endfor %}
+</div>
+
+## プロジェクト経歴
+
+{% for project in projects %}
+<div class="project">
+
+### {{ project.name }}
+
+<table class="project-summary-table">
+  <tbody>
+    <tr>
+      <th>期間</th>
+      <td>{{ project.period.from }}〜{{ project.period.to }}</td>
+    </tr>
+    <tr>
+      <th>役割</th>
+      <td>{{ project.role }}</td>
+    </tr>
+    <tr>
+      <th>チーム規模</th>
+      <td>{{ project.team_size }}</td>
+    </tr>
+    <tr>
+      <th>概要</th>
+      <td>{{ project.summary }}</td>
+    </tr>
+  </tbody>
+</table>
+
+<section class="project-section">
+<h4>担当業務</h4>
+
+<ul>
+{% for item in project.responsibilities %}
+  <li>{{ item }}</li>
+{% endfor %}
+</ul>
+</section>
+
+<section class="project-section">
+<h4>成果・改善</h4>
+
+<ul>
+{% for item in project.achievements %}
+  <li>{{ item }}</li>
+{% endfor %}
+</ul>
+</section>
+
+<section class="project-section">
+<h4>開発環境</h4>
+
+<table class="env-table">
+  <thead>
+    <tr>
+      <th>区分</th>
+      <th>技術</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>言語</td>
+      <td>{{ project.technologies.languages | join(", ") }}</td>
+    </tr>
+    <tr>
+      <td>FW/ライブラリ</td>
+      <td>{{ project.technologies.frameworks | join(", ") }}</td>
+    </tr>
+    <tr>
+      <td>DB</td>
+      <td>{{ project.technologies.db | join(", ") }}</td>
+    </tr>
+    <tr>
+      <td>ツール</td>
+      <td>{{ project.technologies.tools | join(", ") }}</td>
+    </tr>
+{% if project.versions %}
+    <tr class="version-row">
+      <td>バージョン</td>
+      <td>{{ project.versions | join(", ") }}</td>
+    </tr>
+{% endif %}
+    <tr class="ai-env-row">
+      <td>AI活用</td>
+      <td>{{ project.ai_usage | select_enabled | join(", ") }}</td>
+    </tr>
+  </tbody>
+</table>
+</section>
+
+<section class="project-section">
+<h4>担当工程</h4>
+
+<table class="phase-table">
+  <thead>
+    <tr>
+      <th>要件定義</th>
+      <th>基本設計</th>
+      <th>詳細設計</th>
+      <th>実装</th>
+      <th>レビュー</th>
+      <th>テスト</th>
+      <th>運用保守</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>{% if project.phases.requirement %}<span class="phase-dot"></span>{% endif %}</td>
+      <td>{% if project.phases.basic_design %}<span class="phase-dot"></span>{% endif %}</td>
+      <td>{% if project.phases.detail_design %}<span class="phase-dot"></span>{% endif %}</td>
+      <td>{% if project.phases.implementation %}<span class="phase-dot"></span>{% endif %}</td>
+      <td>{% if project.phases.review %}<span class="phase-dot"></span>{% endif %}</td>
+      <td>{% if project.phases.test %}<span class="phase-dot"></span>{% endif %}</td>
+      <td>{% if project.phases.operation %}<span class="phase-dot"></span>{% endif %}</td>
+    </tr>
+  </tbody>
+</table>
+</section>
+
+</div>
+
+{% endfor %}
