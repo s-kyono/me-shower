@@ -56,6 +56,15 @@ uv run me-shower analyze
 # 手動ログを追加
 uv run me-shower add-log --message "職務経歴データを更新"
 
+# Skill改善提案を生成
+uv run me-shower loop-skills
+
+# Skill改善提案を一覧表示
+uv run me-shower list-skill-reviews
+
+# Skill改善提案を1件反映
+uv run me-shower apply-skill-review --file reviews/skills/2026-07-09/career_architect.md
+
 # Markdownを生成
 uv run me-shower generate-md
 
@@ -82,6 +91,30 @@ uv run me-shower add-log --message "職務経歴データを更新"
 ```
 
 ログは `app/data/events/` にYAMLとして保存されます。
+
+### `uv run me-shower loop-skills`
+
+```bash
+uv run me-shower loop-skills
+```
+
+`.codex/loop-skills/rules/`、`app/data/events/`、`app/data/source_sync/`、`app/generated/resume.md`、`CHANGELOG.md` を読み、各 agent の `SKILLS.md` 改善提案を `app/reviews/skills/YYYY-MM-DD/` に出力します。
+
+### `uv run me-shower list-skill-reviews`
+
+```bash
+uv run me-shower list-skill-reviews
+```
+
+生成済みの Skill 改善提案を一覧表示します。
+
+### `uv run me-shower apply-skill-review`
+
+```bash
+uv run me-shower apply-skill-review --file reviews/skills/2026-07-09/career_architect.md
+```
+
+指定した 1 件の proposal だけを人間レビュー前提で `SKILLS.md` に反映し、`CHANGELOG.md` に履歴を残して `app/reviews/skills_applied/YYYY-MM-DD/` にコピーします。同じ proposal を再度適用すると `already applied` で終了します。
 
 ### `uv run me-shower generate-md`
 
