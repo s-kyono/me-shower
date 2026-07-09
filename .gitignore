@@ -8,6 +8,9 @@ __pycache__/
 .codex/*
 !.codex/agents/
 !.codex/agents/**
+!.codex/loop-skills/
+!.codex/loop-skills/**
+.codex/**/.DS_Store
 
 # Original source documents and local reference assets.
 *.pdf
@@ -28,6 +31,7 @@ app/tmp/
 
 # Generated resume artifacts can contain personal information.
 app/generated/
+app/reviews/
 app/CHANGELOG.md
 
 # Real resume data must not be committed to the public repository.
@@ -35,3 +39,5 @@ app/data/profile.yaml
 app/data/events/
 app/data/projects/
 app/data/skills/
+
+logs

@@ -1,0 +1,87 @@
+global:
+  output_root: reviews/skills
+  required_inputs:
+    - .codex/loop-skills/rules/
+    - data/events/
+    - data/source_sync/
+    - generated/resume.md
+    - CHANGELOG.md
+
+agents:
+  source_sync:
+    suggested_skill:
+      - "`data/events/` と `data/source_sync/` を一次入力として扱う"
+      - "`generated/resume.md` と `CHANGELOG.md` を同期の結果確認に使う"
+      - "原文・要約・確認待ち・衝突を分けて記録する"
+    reasons:
+      - "最新の運用では、原本だけでなく生成済み resume と CHANGELOG も判断材料に入れる必要がある"
+      - "イベントログが空でも、フォールバック方針を明示しておくとループが止まりにくい"
+    patch:
+      - "`data/events/`、`data/source_sync/`、`generated/resume.md`、`CHANGELOG.md` を前提ファイルに追加する"
+      - "原本Excelだけでなく、直近の生成物を同期確認の基準に含める"
+      - "確認待ち・衝突・取り込み候補を出力時に必ず分ける"
+
+  evidence_guard:
+    suggested_skill:
+      - "`generated/resume.md` と `CHANGELOG.md` を最終出力の根拠照合に使う"
+      - "events と source_sync の差分から未確認表現を検出する"
+      - "確認済み、確認待ち、表現案を明確に分離する"
+    reasons:
+      - "最新の職務経歴書は生成物と履歴が別管理になっているため、提出前の監査対象を広げる必要がある"
+      - "AI活用や技術選定のように深掘りされやすい表現は、根拠ソースへの紐付けが重要"
+    patch:
+      - "`generated/resume.md` と `CHANGELOG.md` の照合観点を追記する"
+      - "events/source_sync のメモを未確認事項の一次検出に使う"
+      - "提出用文面に流す前の確認待ち一覧を明示する"
+
+  career_architect:
+    suggested_skill:
+      - "`generated/resume.md` を現在の構成ベースラインとして扱う"
+      - "`CHANGELOG.md` で直近の編集方針と強調軸を確認する"
+      - "直近案件を前面に出し、古い案件を圧縮する"
+    reasons:
+      - "最新の resume では FE リードや開発基盤整備が前面に出ているため、構成判断もそこに合わせるべき"
+      - "案件の見せ順は、履歴ではなく再現できる強みを中心に設計する必要がある"
+    patch:
+      - "`generated/resume.md` を構成設計の入力に追加する"
+      - "`CHANGELOG.md` を優先度判断の参照先に追加する"
+      - "詳細、要点、統合、削る候補の分類を案件ごとに必須化する"
+
+  skill_mapper:
+    suggested_skill:
+      - "技術名を案件・担当範囲・成果へ結びつけて整理する"
+      - "`generated/resume.md` から現在のスキル表示を確認する"
+      - "`CHANGELOG.md` から直近の改善テーマを拾う"
+    reasons:
+      - "今の職務経歴は React / Next.js / TypeScript と基盤整備が強いため、スキルの深度を見せる必要がある"
+      - "古い技術は非掲載候補か周辺スキルとして分けた方が読みやすい"
+    patch:
+      - "主軸、実務、周辺、確認待ち、非掲載候補の区分を明記する"
+      - "各スキルに対して根拠案件と担当範囲を必ず付ける"
+      - "最新案件で使っている技術を主軸として前面に出す"
+
+  application_tailor:
+    suggested_skill:
+      - "応募先ごとの強調点を、最新 resume を基準に組み立てる"
+      - "`CHANGELOG.md` の更新履歴を踏まえて、現在の強みを優先する"
+      - "削る候補と確認待ちを分けて提案する"
+    reasons:
+      - "応募先向けの調整は、最新の提出物を起点にしないと古い経歴に引っ張られやすい"
+      - "自動反映しない運用なので、提案の粒度をそのまま人間レビューに回せる形にする必要がある"
+    patch:
+      - "`generated/resume.md` を出発点にした応募先別メモを追加する"
+      - "`CHANGELOG.md` を使って直近の変更点と差別化ポイントを確認する"
+      - "強調、削る候補、言い換え、確認待ちを分けて出力する"
+
+  export_reviewer:
+    suggested_skill:
+      - "`generated/resume.md` と `CHANGELOG.md` の整合を最終確認する"
+      - "個人情報・機密情報・未確認事項を提出前に止める"
+      - "出力形式とファイル名まで確認対象に含める"
+    reasons:
+      - "提出物の最終ゲートとして、生成物と履歴の両方を見ておく必要がある"
+      - "reviews/skills の提案がそのまま提出物に流れないよう、レビュー基準を明確にしたい"
+    patch:
+      - "`generated/resume.md`、`CHANGELOG.md`、`reviews/skills/` を確認対象に追加する"
+      - "未確認事項と個人情報の混入チェックを強化する"
+      - "提出可否の判定基準を明文化する"
