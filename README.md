@@ -56,6 +56,12 @@ uv run me-shower analyze
 # 手動ログを追加
 uv run me-shower add-log --message "職務経歴データを更新"
 
+# raw source を 1 件正規化
+uv run me-shower normalize-source --file app/data/raw_sources/sample.txt
+
+# raw source を一括正規化
+uv run me-shower normalize-sources
+
 # Skill改善提案を生成
 uv run me-shower loop-skills
 
@@ -91,6 +97,22 @@ uv run me-shower add-log --message "職務経歴データを更新"
 ```
 
 ログは `app/data/events/` にYAMLとして保存されます。
+
+### `uv run me-shower normalize-source`
+
+```bash
+uv run me-shower normalize-source --file app/data/raw_sources/sample.txt
+```
+
+`app/data/raw_sources/*.txt` の 1 ファイルを読み、Evidence Guard で秘匿情報を redaction したうえで、抽象化済みの Canonical Event / Evidence を `app/data/source_sync/YYYY-MM-DD.md` に保存します。raw source の本文は `source_sync` に保存しません。感想だけの tool メモや生活ノイズは除外し、`Resolver分離した` のような雑な記述は downstream で扱いやすい Canonical action に寄せます。分類キーワードやノイズ判定は `.codex/source-intelligence/rules/` 配下の用途別 YAML で管理します。
+
+### `uv run me-shower normalize-sources`
+
+```bash
+uv run me-shower normalize-sources
+```
+
+`app/data/raw_sources/*.txt` をまとめて正規化し、日付ごとの `app/data/source_sync/YYYY-MM-DD.md` を生成します。Learning Loop はこの `source_sync` を入力として利用します。resume 向けの選別や言い換えはここでは行わず、`generate-md` / `issue` の Resume Agent Hook で扱う前提です。
 
 ### `uv run me-shower loop-skills`
 
