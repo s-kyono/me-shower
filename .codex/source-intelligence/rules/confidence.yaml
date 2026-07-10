@@ -1,0 +1,8 @@
+levels:
+  - high
+  - medium
+  - low
+
+thresholds:
+  high_min_signals: 3
+  medium_min_signals: 1

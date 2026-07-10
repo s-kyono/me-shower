@@ -1,0 +1,84 @@
+categories:
+  - implementation
+  - design
+  - review
+  - refactor
+  - testing
+  - operation
+  - communication
+  - learning
+  - noise
+
+category_keywords:
+  implementation:
+    - 実装
+    - 対応
+    - 修正
+    - 開発
+    - resolver
+    - graphql
+    - issue
+    - pr
+    - commit
+  design:
+    - 設計
+    - 仕様
+    - 方針
+    - 構成
+    - アーキテクチャ
+  review:
+    - レビュー
+    - review
+    - pr
+    - 指摘
+    - 確認
+  refactor:
+    - リファクタ
+    - refactor
+    - 整理
+    - 改善
+  testing:
+    - テスト
+    - test
+    - 検証
+    - 動作確認
+    - pytest
+  operation:
+    - 障害
+    - 調査
+    - 運用
+    - デプロイ
+    - リリース
+    - 監視
+  communication:
+    - 相談
+    - 共有
+    - mtg
+    - meeting
+    - 議論
+    - 連携
+    - 認識合わせ
+  learning:
+    - 学習
+    - 調べ
+    - キャッチアップ
+    - 試した
+    - 検証した
+    - 読んだ
+
+decision_keywords:
+  - 方針
+  - 決定
+  - 決め
+  - 採用
+  - 見送
+  - 変更
+
+improvement_keywords:
+  - 改善
+  - 最適化
+  - 削減
+  - 短縮
+  - 安定
+  - 整理
+  - リファクタ
