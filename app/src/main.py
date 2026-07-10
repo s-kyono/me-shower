@@ -1298,16 +1298,29 @@ def detect_noise_categories(text: str) -> list[str]:
     return sorted(set(categories))
 
 
+def has_work_signal(text: str) -> bool:
+    lowered = text.lower()
+    if any(keyword.lower() in lowered for keyword in source_rule_list("decision_keywords")):
+        return True
+    if any(keyword.lower() in lowered for keyword in source_rule_list("improvement_keywords")):
+        return True
+    category_keywords = source_rule_map("category_keywords")
+    if any(keyword.lower() in lowered for keywords in category_keywords.values() for keyword in keywords):
+        return True
+    if re.search(r"(やった|進めた|進行|対応|実施|修正|見直し|見直した|分離|整理|決めた|決定|受けた|もらった)", text):
+        return True
+    return False
+
+
 def is_noise_only_line(text: str) -> bool:
     lowered = text.lower()
     if not lowered.strip():
         return True
     noise_keywords = source_rule_map("noise_keywords")
     signal_keywords = source_rule_list("tag_keywords") + source_rule_list("tool_keywords")
-    category_keywords = source_rule_map("category_keywords")
     if any(keyword.lower() in lowered for keywords in noise_keywords.values() for keyword in keywords):
         has_signal = any(keyword.lower() in lowered for keyword in signal_keywords)
-        has_work_term = any(keyword.lower() in lowered for keywords in category_keywords.values() for keyword in keywords)
+        has_work_term = has_work_signal(text)
         return not (has_signal or has_work_term)
     return False
 
@@ -1329,8 +1342,9 @@ def detect_category(text: str) -> str:
 
 def extract_keyword_matches(text: str, keywords: list[str]) -> list[str]:
     found: list[str] = []
+    lowered = text.lower()
     for keyword in keywords:
-        if re.search(rf"(?i)\b{re.escape(keyword)}\b", text):
+        if keyword.lower() in lowered:
             found.append(keyword)
     return found
 
@@ -1340,14 +1354,117 @@ def summarize_line(text: str) -> str:
     return summary[:140]
 
 
+def collect_focus_terms(text: str, tags: list[str]) -> list[str]:
+    tool_keywords = set(source_rule_list("tool_keywords"))
+    terms = [tag for tag in tags if tag not in {"PR", "Issue", "GitHub", "Slack"} and tag not in tool_keywords]
+    inferred_terms = [
+        ("Resolver", "resolver"),
+        ("GraphQL", "graphql"),
+        ("schema", "schema"),
+        ("Fragment", "fragment"),
+    ]
+    lowered = text.lower()
+    for label, keyword in inferred_terms:
+        if keyword in lowered:
+            terms.append(label)
+    if "設計" in text:
+        terms.append("設計")
+    if "リファクタ" in text:
+        terms.append("リファクタ")
+    return dedupe_preserving_order(terms)
+
+
+def build_subject_phrase(text: str, tags: list[str]) -> str:
+    focus_terms = collect_focus_terms(text, tags)
+    if not focus_terms:
+        return ""
+    if "GraphQL" in focus_terms and "Resolver" in focus_terms:
+        return "GraphQL Resolver"
+    return " / ".join(focus_terms[:2])
+
+
+def is_low_signal_line(text: str, *, tags: list[str], tools: list[str]) -> bool:
+    if not tools:
+        return False
+    subject = build_subject_phrase(text, tags)
+    if subject:
+        return False
+    if has_work_signal(text):
+        return False
+    return bool(re.search(r"(便利|聞いた|相談した|試した|メモ|気になる)", text))
+
+
+def canonicalize_action(text: str, *, category: str, tags: list[str], tools: list[str]) -> str | None:
+    subject = build_subject_phrase(text, tags)
+    has_pr = "PR" in text or "pr" in text.lower()
+
+    if is_low_signal_line(text, tags=tags, tools=tools):
+        return None
+    if "分離" in text:
+        if subject:
+            return f"{subject}分離を実施"
+        return "責務分離を実施"
+    if ("方針" in text or "方針を" in text) and re.search(r"(決めた|決定|整理|見直し)", text):
+        if "リファクタ" in text:
+            return "リファクタ方針を決定"
+        if subject:
+            return f"{subject}の方針を決定"
+        return "実装方針を決定"
+    if "指摘" in text and re.search(r"(受けた|もらった|反映)", text):
+        prefix = "PRレビューで" if has_pr else ""
+        if "設計" in text:
+            return f"{prefix}設計指摘を受領"
+        return f"{prefix}レビュー指摘を受領"
+    if "レビュー" in text and re.search(r"(受けた|もらった|実施)", text):
+        if has_pr:
+            return "PRレビューを実施"
+        return "レビュー対応を実施"
+    if tools and re.search(r"(聞いた|相談した|整理)", text):
+        tool_name = tools[0]
+        if subject:
+            return f"{tool_name}で{subject}の論点を整理"
+        return None
+    if subject:
+        if category == "design":
+            return f"{subject}の設計検討を実施"
+        if category == "review":
+            return f"{subject}のレビュー対応を実施"
+        if category == "refactor":
+            return f"{subject}のリファクタリングを実施"
+        if category == "learning":
+            return f"{subject}の技術調査を実施"
+        return f"{subject}関連の実装・調査を実施"
+    if category == "review":
+        return "レビュー対応を実施"
+    if category == "refactor":
+        return "リファクタリングを実施"
+    if category == "design":
+        return "設計検討を実施"
+    if category == "testing":
+        return "検証を実施"
+    if category == "operation":
+        return "運用対応を実施"
+    if category == "learning":
+        return "技術調査を実施"
+    return summarize_line(text)
+
+
 def extract_decision_text(text: str) -> str | None:
     patterns = source_rule_list("decision_keywords")
-    return summarize_line(text) if any(pattern in text for pattern in patterns) else None
+    if not any(pattern in text for pattern in patterns):
+        return None
+    if "リファクタ" in text and re.search(r"(方針|決めた|決定)", text):
+        return "リファクタ方針を決定"
+    return summarize_line(text)
 
 
 def extract_improvement_text(text: str) -> str | None:
     patterns = source_rule_list("improvement_keywords")
-    return summarize_line(text) if any(pattern in text for pattern in patterns) else None
+    if not any(pattern in text for pattern in patterns):
+        return None
+    if "リファクタ" in text:
+        return "リファクタリング方針を整理"
+    return summarize_line(text)
 
 
 def estimate_confidence(*, actions: list[str], tags: list[str], decisions: list[str], evidence_excerpt: str) -> str:
@@ -1391,26 +1508,36 @@ def build_canonical_event(source_path: Path) -> dict[str, Any]:
             noise_categories.extend(line_noise or ["small_talk"])
             continue
 
+        tags_for_line = extract_keyword_matches(line, source_rule_list("tag_keywords"))
+        tools_for_line = extract_keyword_matches(line, source_rule_list("tool_keywords"))
+        if not has_work_signal(line) and not tags_for_line and not tools_for_line:
+            noise_categories.extend(line_noise or ["low_signal"])
+            continue
+        action_text = canonicalize_action(line, category=category, tags=tags_for_line, tools=tools_for_line)
+        if action_text is None:
+            noise_categories.extend(line_noise or ["low_signal"])
+            continue
+
         if line_noise:
             noise_categories.extend(line_noise)
 
         kept_lines.append(line)
-        actions.append(summarize_line(line))
+        actions.append(action_text)
         decision = extract_decision_text(line)
         if decision:
             decisions.append(decision)
         improvement = extract_improvement_text(line)
         if improvement:
             improvements.append(improvement)
-        tags.extend(extract_keyword_matches(line, source_rule_list("tag_keywords")))
-        tools.extend(extract_keyword_matches(line, source_rule_list("tool_keywords")))
+        tags.extend(tags_for_line)
+        tools.extend(tools_for_line)
 
     dominant_category = max(
         ((name, score) for name, score in category_scores.items() if name != "noise"),
         key=lambda item: item[1],
         default=("communication", 0),
     )[0]
-    summary = summarize_line(kept_lines[0]) if kept_lines else "作業上有意な技術イベントを抽出できなかった"
+    summary = actions[0] if actions else "作業上有意な技術イベントを抽出できなかった"
     evidence_basis = " / ".join(kept_lines[:3]) if kept_lines else "有意な技術イベントなし"
     evidence_excerpt = summarize_line(evidence_basis)[:200]
 

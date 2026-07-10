@@ -404,6 +404,60 @@ def test_normalize_sources_processes_multiple_files(monkeypatch, tmp_path: Path)
     assert "Claude" in source_sync_dir.joinpath("2026-07-09.md").read_text(encoding="utf-8")
 
 
+def test_normalize_source_filters_low_signal_noisy_input(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    raw_file = data_dir / "raw_sources" / "noisy_sample.txt"
+    raw_file.parent.mkdir(parents=True, exist_ok=True)
+    raw_file.write_text(
+        "\n".join(
+            [
+                "今日は眠い",
+                "コーヒー飲んだ",
+                "レビュー受けた",
+                "GraphQLやった",
+                "Cursor便利",
+                "Resolver分離した",
+                "雨だった",
+                "Claudeに聞いた",
+                "疲れた",
+                "PRで設計指摘もらった",
+                "リファクタ方針を決めた",
+                "昼飯ラーメン",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_path = main.normalize_source_file(raw_file)
+    content = output_path.read_text(encoding="utf-8")
+
+    assert "レビュー対応を実施" in content
+    assert "GraphQL関連の実装・調査を実施" in content
+    assert "Resolver分離を実施" in content
+    assert "PRレビューで設計指摘を受領" in content
+    assert "リファクタ方針を決定" in content
+    assert "Cursor便利" not in content
+    assert "Claudeに聞いた" not in content
+    assert "今日は眠い" not in content
+    assert "コーヒー" not in content
+    assert "雨だった" not in content
+    assert "疲れた" not in content
+    assert "昼飯" not in content
+    assert "fatigue" in content
+    assert "drink" in content
+    assert "weather" in content
+    assert "meal" in content
+    assert "low_signal" in content
+
+
 def test_resume_agent_hook_is_design_only() -> None:
     context = main.run_resume_agent_hook("generate-md")
 
