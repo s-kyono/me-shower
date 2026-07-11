@@ -4,7 +4,6 @@ import hashlib
 import json
 from difflib import SequenceMatcher
 from datetime import date, datetime
-from functools import lru_cache
 from pathlib import Path
 import re
 import shutil
@@ -80,55 +79,6 @@ def read_yaml(path: Path) -> Any:
         return yaml.safe_load(file) or {}
 
 
-def source_intelligence_rules_dir() -> Path:
-    return REPO_ROOT / ".codex" / "source-intelligence" / "rules"
-
-
-def rule_file_path(filename: str) -> Path:
-    return source_intelligence_rules_dir() / filename
-
-
-@lru_cache(maxsize=32)
-def load_rule_document(path_text: str) -> dict[str, Any]:
-    path = Path(path_text)
-    value = read_yaml(path)
-    if not isinstance(value, dict):
-        raise typer.BadParameter(f"Invalid source intelligence rule: {path}")
-    return value
-
-
-def load_rule_file(filename: str) -> dict[str, Any]:
-    return load_rule_document(str(rule_file_path(filename)))
-
-
-def load_category_rules() -> dict[str, Any]:
-    return load_rule_file("categories.yaml")
-
-
-def load_noise_rules() -> dict[str, Any]:
-    return load_rule_file("noise.yaml")
-
-
-def load_ai_tool_rules() -> dict[str, Any]:
-    return load_rule_file("ai_tools.yaml")
-
-
-def load_technology_rules() -> dict[str, Any]:
-    return load_rule_file("technologies.yaml")
-
-
-def load_confidence_rules() -> dict[str, Any]:
-    return load_rule_file("confidence.yaml")
-
-
-def load_evidence_rules() -> dict[str, Any]:
-    return load_rule_file("evidence.yaml")
-
-
-def load_sensitive_label_rules() -> dict[str, Any]:
-    return load_rule_file("sensitive_labels.yaml")
-
-
 def redact_sensitive_text(message: str) -> tuple[str, list[dict[str, str]]]:
     findings: list[dict[str, str]] = []
     redacted = message
@@ -163,7 +113,6 @@ def build_guard_report(
     event_path: Path,
     findings: list[dict[str, str]],
     redacted_message: str,
-    action_label: str = "add-log",
 ) -> str:
     grouped: dict[str, int] = {}
     for finding in findings:
@@ -175,7 +124,7 @@ def build_guard_report(
         for finding in findings
     ]
 
-    return f"""## {timestamp} {action_label} redaction
+    return f"""## {timestamp} add-log redaction
 
 ### Event
 - {display_path(event_path)}
@@ -204,29 +153,6 @@ def append_guard_report(report: str, report_date: str) -> Path:
         content = "# Guard Review\n\n" + report.rstrip() + "\n"
     report_path.write_text(content, encoding="utf-8")
     return report_path
-
-
-def maybe_write_guard_report(
-    *,
-    timestamp: str,
-    report_date: str,
-    event_path: Path,
-    findings: list[dict[str, str]],
-    redacted_message: str,
-    action_label: str,
-) -> Path | None:
-    if not findings:
-        return None
-    return append_guard_report(
-        build_guard_report(
-            timestamp=timestamp,
-            event_path=event_path,
-            findings=findings,
-            redacted_message=redacted_message,
-            action_label=action_label,
-        ),
-        report_date=report_date,
-    )
 
 
 def read_yaml_files(directory: Path) -> list[dict[str, Any]]:
@@ -317,7 +243,7 @@ def read_text_sources(directory: Path) -> list[dict[str, str]]:
             continue
         items.append(
             {
-                "path": display_path(path),
+                "path": str(path.relative_to(ROOT)),
                 "content": path.read_text(encoding="utf-8"),
             }
         )
@@ -685,14 +611,6 @@ def extract_patch_block(proposal_text: str) -> str:
     return match.group(1).strip("\n")
 
 
-def infer_review_date(path: Path, proposal_text: str = "") -> str:
-    for candidate in [str(path), proposal_text]:
-        match = re.search(r"(20\d{2}-\d{2}-\d{2})", candidate)
-        if match:
-            return match.group(1)
-    return date.today().strftime("%Y-%m-%d")
-
-
 def normalize_patch_block(patch_block: str) -> str:
     normalized_lines: list[str] = []
     for raw_line in patch_block.splitlines():
@@ -970,7 +888,6 @@ def apply_skill_review_file(proposal_path: Path) -> dict[str, str]:
     source_key = display_path(proposal_path)
     target_path = resolve_input_path(target_text)
     target_text_current = target_path.read_text(encoding="utf-8")
-    applied_date = infer_review_date(proposal_path, proposal_text)
 
     applied_records = read_applied_skill_reviews()
     is_already_applied = any(
@@ -999,7 +916,7 @@ def apply_skill_review_file(proposal_path: Path) -> dict[str, str]:
         appended_block = "\n\n".join(appended_parts).rstrip() + "\n"
     target_path.write_text(appended_block, encoding="utf-8")
 
-    applied_dir = SKILL_REVIEWS_APPLIED_DIR / applied_date
+    applied_dir = SKILL_REVIEWS_APPLIED_DIR / date.today().strftime("%Y-%m-%d")
     applied_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(proposal_path, applied_dir / proposal_path.name)
 
@@ -1014,7 +931,7 @@ def apply_skill_review_file(proposal_path: Path) -> dict[str, str]:
     append_applied_skill_review_record(
         {
             "agent": agent,
-            "applied_at": applied_date,
+            "applied_at": date.today().strftime("%Y-%m-%d"),
             "normalized_summary": normalized_summary,
             "patch_hash": patch_hash,
             "patch_summary": summary,
@@ -1094,31 +1011,7 @@ def markdown_to_pdf(markdown_path: Path, output_path: Path, theme: str = "forest
     )
 
 
-def build_resume_agent_hook_context(trigger: str) -> dict[str, Any]:
-    return {
-        "trigger": trigger,
-        "status": "design_only",
-        "reads": [
-            display_path(SOURCE_SYNC_DIR),
-            display_path(EVENTS_DIR),
-            display_path(GENERATED_DIR / "resume.md"),
-            display_path(CHANGELOG_PATH),
-        ],
-        "contract": {
-            "normalizer_scope": "raw source -> canonical event / evidence",
-            "resume_agent_scope": "canonical event から resume 向けの選別・要約・反映判断を行う",
-            "activation_points": ["generate-md", "issue"],
-        },
-    }
-
-
-def run_resume_agent_hook(trigger: str) -> dict[str, Any]:
-    # Hook contract only. Resume-oriented filtering is intentionally not executed here yet.
-    return build_resume_agent_hook_context(trigger)
-
-
 def generate_markdown_file() -> Path:
-    run_resume_agent_hook("generate-md")
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     output_path = GENERATED_DIR / "resume.md"
     output_path.write_text(render_markdown(), encoding="utf-8")
@@ -1230,448 +1123,7 @@ def append_changelog(entry: str) -> None:
     CHANGELOG_PATH.write_text(content, encoding="utf-8")
 
 
-def source_rule_list(name: str) -> list[str]:
-    merged_rules = {}
-    for loader in [load_category_rules, load_technology_rules, load_ai_tool_rules, load_confidence_rules, load_evidence_rules]:
-        merged_rules.update(loader())
-    value = merged_rules.get(name, [])
-    return [str(item) for item in value] if isinstance(value, list) else []
-
-
-def source_rule_map(name: str) -> dict[str, list[str]]:
-    merged_rules = {}
-    for loader in [load_category_rules, load_noise_rules, load_evidence_rules]:
-        merged_rules.update(loader())
-    value = merged_rules.get(name, {})
-    if not isinstance(value, dict):
-        return {}
-    return {
-        str(key): [str(item) for item in items]
-        for key, items in value.items()
-        if isinstance(items, list)
-    }
-
-
-def detect_source_type(path: Path, text: str) -> str:
-    lowered = f"{path.name} {text[:200]}".lower()
-    source_type_keywords = source_rule_map("source_type_keywords")
-    for source_type, keywords in source_type_keywords.items():
-        if any(keyword.lower() in lowered for keyword in keywords):
-            return source_type
-    return str(load_evidence_rules().get("default_source_type", "text_note"))
-
-
-def extract_source_date(path: Path, text: str) -> str:
-    candidates = [
-        path.stem,
-        path.name,
-        text.splitlines()[0] if text.splitlines() else "",
-    ]
-    for candidate in candidates:
-        match = re.search(r"(20\d{2})[-_/](\d{2})[-_/](\d{2})", candidate)
-        if match:
-            return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
-        compact = re.search(r"(20\d{2})(\d{2})(\d{2})", candidate)
-        if compact:
-            return f"{compact.group(1)}-{compact.group(2)}-{compact.group(3)}"
-    return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d")
-
-
-def split_source_lines(text: str) -> list[str]:
-    lines: list[str] = []
-    for raw_line in text.splitlines():
-        for fragment in re.split(r"[•・;；]", raw_line):
-            normalized = re.sub(r"\s+", " ", fragment).strip(" -\t")
-            if normalized:
-                lines.append(normalized)
-    return lines
-
-
-def detect_noise_categories(text: str) -> list[str]:
-    lowered = text.lower()
-    noise_keywords = source_rule_map("noise_keywords")
-    categories = [
-        category
-        for category, keywords in noise_keywords.items()
-        if any(keyword.lower() in lowered for keyword in keywords)
-    ]
-    return sorted(set(categories))
-
-
-def has_work_signal(text: str) -> bool:
-    lowered = text.lower()
-    if any(keyword.lower() in lowered for keyword in source_rule_list("decision_keywords")):
-        return True
-    if any(keyword.lower() in lowered for keyword in source_rule_list("improvement_keywords")):
-        return True
-    category_keywords = source_rule_map("category_keywords")
-    if any(keyword.lower() in lowered for keywords in category_keywords.values() for keyword in keywords):
-        return True
-    if re.search(r"(やった|進めた|進行|対応|実施|修正|見直し|見直した|分離|整理|決めた|決定|受けた|もらった)", text):
-        return True
-    return False
-
-
-def is_noise_only_line(text: str) -> bool:
-    lowered = text.lower()
-    if not lowered.strip():
-        return True
-    noise_keywords = source_rule_map("noise_keywords")
-    signal_keywords = source_rule_list("tag_keywords") + source_rule_list("tool_keywords")
-    if any(keyword.lower() in lowered for keywords in noise_keywords.values() for keyword in keywords):
-        has_signal = any(keyword.lower() in lowered for keyword in signal_keywords)
-        has_work_term = has_work_signal(text)
-        return not (has_signal or has_work_term)
-    return False
-
-
-def detect_category(text: str) -> str:
-    lowered = text.lower()
-    categories = source_rule_list("categories")
-    category_keywords = source_rule_map("category_keywords")
-    scores: dict[str, int] = {category: 0 for category in categories}
-    for category, keywords in category_keywords.items():
-        for keyword in keywords:
-            if keyword.lower() in lowered:
-                scores[category] += 1
-    if is_noise_only_line(text):
-        return "noise"
-    best = max((item for item in scores.items() if item[0] != "noise"), key=lambda item: item[1], default=("communication", 0))
-    return best[0] if best[1] > 0 else "communication"
-
-
-def extract_keyword_matches(text: str, keywords: list[str]) -> list[str]:
-    found: list[str] = []
-    lowered = text.lower()
-    for keyword in keywords:
-        if keyword.lower() in lowered:
-            found.append(keyword)
-    return found
-
-
-def summarize_line(text: str) -> str:
-    summary = re.sub(r"\[[^\]]+\]", "", text).strip()
-    return summary[:140]
-
-
-def collect_focus_terms(text: str, tags: list[str]) -> list[str]:
-    tool_keywords = set(source_rule_list("tool_keywords"))
-    terms = [tag for tag in tags if tag not in {"PR", "Issue", "GitHub", "Slack"} and tag not in tool_keywords]
-    inferred_terms = [
-        ("Resolver", "resolver"),
-        ("GraphQL", "graphql"),
-        ("schema", "schema"),
-        ("Fragment", "fragment"),
-    ]
-    lowered = text.lower()
-    for label, keyword in inferred_terms:
-        if keyword in lowered:
-            terms.append(label)
-    if "設計" in text:
-        terms.append("設計")
-    if "リファクタ" in text:
-        terms.append("リファクタ")
-    return dedupe_preserving_order(terms)
-
-
-def build_subject_phrase(text: str, tags: list[str]) -> str:
-    focus_terms = collect_focus_terms(text, tags)
-    if not focus_terms:
-        return ""
-    if "GraphQL" in focus_terms and "Resolver" in focus_terms:
-        return "GraphQL Resolver"
-    return " / ".join(focus_terms[:2])
-
-
-def is_low_signal_line(text: str, *, tags: list[str], tools: list[str]) -> bool:
-    if not tools:
-        return False
-    subject = build_subject_phrase(text, tags)
-    if subject:
-        return False
-    if has_work_signal(text):
-        return False
-    return bool(re.search(r"(便利|聞いた|相談した|試した|メモ|気になる)", text))
-
-
-def canonicalize_action(text: str, *, category: str, tags: list[str], tools: list[str]) -> str | None:
-    subject = build_subject_phrase(text, tags)
-    has_pr = "PR" in text or "pr" in text.lower()
-
-    if is_low_signal_line(text, tags=tags, tools=tools):
-        return None
-    if "分離" in text:
-        if subject:
-            return f"{subject}分離を実施"
-        return "責務分離を実施"
-    if ("方針" in text or "方針を" in text) and re.search(r"(決めた|決定|整理|見直し)", text):
-        if "リファクタ" in text:
-            return "リファクタ方針を決定"
-        if subject:
-            return f"{subject}の方針を決定"
-        return "実装方針を決定"
-    if "指摘" in text and re.search(r"(受けた|もらった|反映)", text):
-        prefix = "PRレビューで" if has_pr else ""
-        if "設計" in text:
-            return f"{prefix}設計指摘を受領"
-        return f"{prefix}レビュー指摘を受領"
-    if "レビュー" in text and re.search(r"(受けた|もらった|実施)", text):
-        if has_pr:
-            return "PRレビューを実施"
-        return "レビュー対応を実施"
-    if tools and re.search(r"(聞いた|相談した|整理)", text):
-        tool_name = tools[0]
-        if subject:
-            return f"{tool_name}で{subject}の論点を整理"
-        return None
-    if subject:
-        if category == "design":
-            return f"{subject}の設計検討を実施"
-        if category == "review":
-            return f"{subject}のレビュー対応を実施"
-        if category == "refactor":
-            return f"{subject}のリファクタリングを実施"
-        if category == "learning":
-            return f"{subject}の技術調査を実施"
-        return f"{subject}関連の実装・調査を実施"
-    if category == "review":
-        return "レビュー対応を実施"
-    if category == "refactor":
-        return "リファクタリングを実施"
-    if category == "design":
-        return "設計検討を実施"
-    if category == "testing":
-        return "検証を実施"
-    if category == "operation":
-        return "運用対応を実施"
-    if category == "learning":
-        return "技術調査を実施"
-    return summarize_line(text)
-
-
-def extract_decision_text(text: str) -> str | None:
-    patterns = source_rule_list("decision_keywords")
-    if not any(pattern in text for pattern in patterns):
-        return None
-    if "リファクタ" in text and re.search(r"(方針|決めた|決定)", text):
-        return "リファクタ方針を決定"
-    return summarize_line(text)
-
-
-def extract_improvement_text(text: str) -> str | None:
-    patterns = source_rule_list("improvement_keywords")
-    if not any(pattern in text for pattern in patterns):
-        return None
-    if "リファクタ" in text:
-        return "リファクタリング方針を整理"
-    return summarize_line(text)
-
-
-def estimate_confidence(*, actions: list[str], tags: list[str], decisions: list[str], evidence_excerpt: str) -> str:
-    rules = load_confidence_rules()
-    levels = rules.get("levels", ["high", "medium", "low"])
-    thresholds = rules.get("thresholds", {})
-    if "[REDACTED_" in evidence_excerpt:
-        return str(levels[0]) if levels else "high"
-    signal_count = len(actions) + len(tags) + len(decisions)
-    high_min = int(thresholds.get("high_min_signals", 3))
-    medium_min = int(thresholds.get("medium_min_signals", 1))
-    if signal_count >= high_min:
-        return "high"
-    if signal_count >= medium_min:
-        return "medium"
-    return "low"
-
-
-def build_canonical_event(source_path: Path) -> dict[str, Any]:
-    raw_text = source_path.read_text(encoding="utf-8")
-    redacted_text, findings = redact_sensitive_text(raw_text)
-    date_text = extract_source_date(source_path, redacted_text)
-    source_type = detect_source_type(source_path, redacted_text)
-    lines = split_source_lines(redacted_text)
-
-    kept_lines: list[str] = []
-    actions: list[str] = []
-    decisions: list[str] = []
-    improvements: list[str] = []
-    tags: list[str] = []
-    tools: list[str] = []
-    noise_categories: list[str] = []
-    categories = source_rule_list("categories")
-    category_scores: dict[str, int] = {category: 0 for category in categories}
-
-    for line in lines:
-        category = detect_category(line)
-        category_scores[category] += 1
-        line_noise = detect_noise_categories(line)
-        if category == "noise" or is_noise_only_line(line):
-            noise_categories.extend(line_noise or ["small_talk"])
-            continue
-
-        tags_for_line = extract_keyword_matches(line, source_rule_list("tag_keywords"))
-        tools_for_line = extract_keyword_matches(line, source_rule_list("tool_keywords"))
-        if not has_work_signal(line) and not tags_for_line and not tools_for_line:
-            noise_categories.extend(line_noise or ["low_signal"])
-            continue
-        action_text = canonicalize_action(line, category=category, tags=tags_for_line, tools=tools_for_line)
-        if action_text is None:
-            noise_categories.extend(line_noise or ["low_signal"])
-            continue
-
-        if line_noise:
-            noise_categories.extend(line_noise)
-
-        kept_lines.append(line)
-        actions.append(action_text)
-        decision = extract_decision_text(line)
-        if decision:
-            decisions.append(decision)
-        improvement = extract_improvement_text(line)
-        if improvement:
-            improvements.append(improvement)
-        tags.extend(tags_for_line)
-        tools.extend(tools_for_line)
-
-    dominant_category = max(
-        ((name, score) for name, score in category_scores.items() if name != "noise"),
-        key=lambda item: item[1],
-        default=("communication", 0),
-    )[0]
-    summary = actions[0] if actions else "作業上有意な技術イベントを抽出できなかった"
-    evidence_basis = " / ".join(kept_lines[:3]) if kept_lines else "有意な技術イベントなし"
-    evidence_excerpt = summarize_line(evidence_basis)[:200]
-
-    return {
-        "schema": str(load_evidence_rules().get("schema", "canonical_event_v0")),
-        "date": date_text,
-        "source_type": source_type,
-        "category": dominant_category if kept_lines else "noise",
-        "summary": summary,
-        "actions": dedupe_preserving_order(actions),
-        "decisions": dedupe_preserving_order(decisions),
-        "improvements": dedupe_preserving_order(improvements),
-        "tags": dedupe_preserving_order(tags),
-        "tools": dedupe_preserving_order(tools),
-        "noise_removed": dedupe_preserving_order(sorted(set(noise_categories))),
-        "confidence": estimate_confidence(
-            actions=actions,
-            tags=tags,
-            decisions=decisions,
-            evidence_excerpt=evidence_excerpt,
-        ),
-        "evidence": [
-            {
-                "kind": str(load_evidence_rules().get("excerpt_kind", "redacted_excerpt")),
-                "detail": evidence_excerpt,
-            },
-            {
-                "kind": str(load_evidence_rules().get("source_reference_kind", "source_reference")),
-                "detail": source_path.name,
-            },
-        ],
-        "_guard_findings": findings,
-        "_source_path": source_path,
-    }
-
-
-def format_canonical_event(event: dict[str, Any]) -> str:
-    def render_list(values: list[str]) -> str:
-        return "\n".join(f"  - {value}" for value in values) if values else "  - none"
-
-    def render_evidence(items: list[dict[str, str]]) -> str:
-        if not items:
-            return "  - kind: none\n    detail: none"
-        return "\n".join(
-            [
-                "  - kind: " + str(item.get("kind", "unknown")) + "\n    detail: " + str(item.get("detail", ""))
-                for item in items
-            ]
-        )
-
-    lines = [
-        "- schema: " + str(event["schema"]),
-        "- date: " + str(event["date"]),
-        "  source_type: " + str(event["source_type"]),
-        "  category: " + str(event["category"]),
-        "  summary: " + str(event["summary"]),
-        "  actions:",
-        render_list(event["actions"]),
-        "  decisions:",
-        render_list(event["decisions"]),
-        "  improvements:",
-        render_list(event["improvements"]),
-        "  tags:",
-        render_list(event["tags"]),
-        "  tools:",
-        render_list(event["tools"]),
-        "  noise_removed:",
-        render_list(event["noise_removed"]),
-        "  confidence: " + str(event["confidence"]),
-        "  evidence:",
-        render_evidence(event["evidence"]),
-    ]
-    return "\n".join(lines)
-
-
-def write_source_sync_file(target_date: str, events: list[dict[str, Any]]) -> Path:
-    SOURCE_SYNC_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = SOURCE_SYNC_DIR / f"{target_date}.md"
-    body = [
-        "# Canonical Events",
-        "",
-        f"date: {target_date}",
-        "",
-    ]
-    for index, event in enumerate(events, start=1):
-        body.append(f"## Event {index}")
-        body.append(format_canonical_event(event))
-        body.append("")
-    output_path.write_text("\n".join(body).rstrip() + "\n", encoding="utf-8")
-    return output_path
-
-
-def normalize_source_file(file_path: str | Path) -> Path:
-    source_path = resolve_input_path(str(file_path))
-    event = build_canonical_event(source_path)
-    output_path = write_source_sync_file(event["date"], [event])
-    report_path = maybe_write_guard_report(
-        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        report_date=event["date"],
-        event_path=output_path,
-        findings=event["_guard_findings"],
-        redacted_message="\n".join(item["detail"] for item in event["evidence"] if item["kind"] == "redacted_excerpt"),
-        action_label="normalize-source",
-    )
-    if report_path is not None:
-        typer.echo(f"Guard report: {report_path.relative_to(ROOT)}")
-    return output_path
-
-
-def normalize_all_sources() -> list[Path]:
-    raw_dir = DATA_DIR / "raw_sources"
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    grouped_events: dict[str, list[dict[str, Any]]] = {}
-
-    for source_path in sorted(raw_dir.glob("*.txt")):
-        event = build_canonical_event(source_path)
-        grouped_events.setdefault(event["date"], []).append(event)
-        maybe_write_guard_report(
-            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            report_date=event["date"],
-            event_path=SOURCE_SYNC_DIR / f"{event['date']}.md",
-            findings=event["_guard_findings"],
-            redacted_message="\n".join(item["detail"] for item in event["evidence"] if item["kind"] == "redacted_excerpt"),
-            action_label="normalize-sources",
-        )
-
-    output_paths: list[Path] = []
-    for target_date, events in sorted(grouped_events.items()):
-        output_paths.append(write_source_sync_file(target_date, events))
-    return output_paths
-
-
 def issue_resume(title: str, note: str, theme: str = "forest") -> Path:
-    run_resume_agent_hook("issue")
     markdown_path = generate_markdown_file()
     pdf_path = generate_pdf_file(theme=theme)
 
@@ -1708,15 +1160,16 @@ def add_log(message: str = typer.Option("", "--message", "-m", help="Log message
     }
     with path.open("w", encoding="utf-8") as file:
         yaml.safe_dump(payload, file, allow_unicode=True, sort_keys=False)
-    report_path = maybe_write_guard_report(
-        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        report_date=today,
-        event_path=path,
-        findings=findings,
-        redacted_message=redacted_message,
-        action_label="add-log",
-    )
-    if report_path is not None:
+    if findings:
+        report_path = append_guard_report(
+            build_guard_report(
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                event_path=path,
+                findings=findings,
+                redacted_message=redacted_message,
+            ),
+            report_date=today,
+        )
         typer.echo(f"Guard report: {report_path.relative_to(ROOT)}")
     typer.echo(f"Added log: {path.relative_to(ROOT)}")
 
@@ -1744,27 +1197,6 @@ def generate_md() -> None:
     """Generate Markdown resume from YAML data and Jinja2 template."""
     output_path = generate_markdown_file()
     typer.echo(f"Generated Markdown: {output_path.relative_to(ROOT)}")
-
-
-@app.command("normalize-source")
-def normalize_source(
-    file: str = typer.Option(..., "--file", "-f", help="Raw source text file to normalize."),
-) -> None:
-    """Normalize one raw source text file into a canonical event markdown file."""
-    output_path = normalize_source_file(file)
-    typer.echo(f"Normalized source: {output_path.relative_to(ROOT)}")
-
-
-@app.command("normalize-sources")
-def normalize_sources() -> None:
-    """Normalize all raw source text files under data/raw_sources/."""
-    output_paths = normalize_all_sources()
-    if not output_paths:
-        typer.echo("No raw source files found.")
-        return
-    typer.echo(f"Normalized {len(output_paths)} day files")
-    for path in output_paths:
-        typer.echo(f"- {path.relative_to(ROOT)}")
 
 
 @app.command("generate-pdf")
