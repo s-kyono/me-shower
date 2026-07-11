@@ -138,6 +138,8 @@ uv run me-shower normalize-sources
 
 `app/data/raw_sources/*.txt` をまとめて正規化し、日付ごとの `app/data/source_sync/YYYY-MM-DD.md` を生成します。Learning Loop はこの `source_sync` を入力として利用します。resume 向けの選別や言い換えはここでは行わず、`generate-md` / `issue` の Resume Agent Hook で扱う前提です。
 
+Source Confidence は、Canonical Event の evidence quality を `high` / `medium` / `low` で表します。これは成果の価値判断ではなく、source / metadata / extraction quality / noise の強さを表す運用指標です。
+
 ### `uv run me-shower inspect-daily-report`
 
 ```bash
