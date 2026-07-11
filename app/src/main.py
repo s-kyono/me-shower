@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import html
 import hashlib
 import json
+import os
+from dataclasses import dataclass
 from difflib import SequenceMatcher
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 import re
 import shutil
-from typing import Any
+import subprocess
+from typing import Any, Callable, Protocol
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 import typer
 import yaml
@@ -20,9 +28,12 @@ app = typer.Typer(help="Generate career resume Markdown and PDF outputs.")
 ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ROOT.parent
 DATA_DIR = ROOT / "data"
+DAILY_REPORTS_DIR = DATA_DIR / "daily_reports"
 TEMPLATE_DIR = ROOT / "templates"
 THEMES_DIR = TEMPLATE_DIR / "themes"
 GENERATED_DIR = ROOT / "generated"
+SOURCE_TIMELINE_PATH = GENERATED_DIR / "source_timeline.md"
+SOURCE_TIMELINE_JSONL_PATH = GENERATED_DIR / "source_timeline.jsonl"
 CHANGELOG_PATH = ROOT / "CHANGELOG.md"
 RELEASES_DIR = GENERATED_DIR / "releases"
 CODEX_DIR = REPO_ROOT / ".codex"
@@ -72,11 +83,930 @@ REDACTION_RULES = [
 ]
 
 
+@dataclass(frozen=True)
+class RawSource:
+    id: str
+    source_type: str
+    origin: str
+    title: str
+    content: str
+    captured_at: str
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SourceConfidence:
+    level: str
+    score: int
+    reasons: list[str]
+
+
+@dataclass(frozen=True)
+class SourceTimelineItem:
+    date: str
+    source_id: str
+    source_type: str
+    category: str
+    summary: str
+    actions: list[str]
+    decisions: list[str]
+    improvements: list[str]
+    tags: list[str]
+    tools: list[str]
+    confidence: str
+    confidence_reasons: list[str]
+    evidence_details: list[str]
+    source_sync_path: str
+    event_index: int
+
+
+class SourceAdapterError(Exception):
+    pass
+
+
+class SourceNotFoundError(SourceAdapterError):
+    pass
+
+
+class SourceAccessError(SourceAdapterError):
+    pass
+
+
+class SourceAdapter(Protocol):
+    name: str
+
+    def discover(self) -> list[RawSource]:
+        ...
+
+    def fetch(self, source_id: str) -> RawSource:
+        ...
+
+
+class FileSourceAdapter:
+    name = "file"
+
+    def __init__(self, raw_dir: Path) -> None:
+        self.raw_dir = raw_dir
+
+    def discover(self) -> list[RawSource]:
+        self.raw_dir.mkdir(parents=True, exist_ok=True)
+        return [self._build_raw_source(path) for path in sorted(self.raw_dir.glob("*.txt"))]
+
+    def fetch(self, source_id: str) -> RawSource:
+        for source in self.discover():
+            if source.id == source_id:
+                return source
+        raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+
+    def _build_raw_source(self, path: Path) -> RawSource:
+        resolved = path.resolve()
+        stat = resolved.stat()
+        return RawSource(
+            id=resolved.name,
+            source_type="file",
+            origin=str(resolved),
+            title=resolved.name,
+            content=resolved.read_text(encoding="utf-8"),
+            captured_at=datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            metadata={
+                "path": str(resolved),
+                "size_bytes": stat.st_size,
+            },
+        )
+
+
+class DailyReportSourceAdapter:
+    name = "daily_report"
+
+    def __init__(self, reports_dir: Path, limit: int | None = None) -> None:
+        self.reports_dir = reports_dir
+        self.limit = limit
+
+    def discover(self) -> list[RawSource]:
+        self.reports_dir.mkdir(parents=True, exist_ok=True)
+        paths = [
+            path
+            for path in sorted(self.reports_dir.rglob("*"))
+            if path.is_file() and path.suffix.lower() in {".md", ".txt"}
+        ]
+        sources = [self._build_raw_source(path) for path in paths]
+        sources.sort(key=lambda item: (item.metadata.get("detected_date", ""), item.id), reverse=True)
+        if self.limit is not None:
+            return sources[: self.limit]
+        return sources
+
+    def fetch(self, source_id: str) -> RawSource:
+        for source in self.discover():
+            if source.id == source_id:
+                return source
+        raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+
+    def _build_raw_source(self, path: Path) -> RawSource:
+        resolved = path.resolve()
+        stat = resolved.stat()
+        relative_path = self._relative_path(resolved)
+        raw_text = resolved.read_text(encoding="utf-8", errors="replace")
+        parsed = parse_optional_frontmatter(raw_text)
+        content = parsed["content"]
+        frontmatter = parsed["frontmatter"]
+        detected_date = detect_daily_report_date(
+            resolved,
+            raw_text,
+            content,
+            frontmatter,
+            fallback=datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        )
+        source_reference = f"daily_report:{display_path(resolved)}"
+        title_suffix = detected_date or resolved.stem
+        metadata: dict[str, Any] = {
+            "kind": infer_daily_report_kind(resolved, frontmatter, content),
+            "path": str(resolved),
+            "relative_path": relative_path,
+            "detected_date": detected_date,
+            "source_reference": source_reference,
+            "format": "markdown" if resolved.suffix.lower() == ".md" else "text",
+        }
+        if frontmatter:
+            metadata["frontmatter"] = frontmatter
+            tags = frontmatter.get("tags")
+            if isinstance(tags, list):
+                metadata["tags"] = [str(tag) for tag in tags]
+
+        return RawSource(
+            id=f"daily_report:{relative_path}",
+            source_type="daily_report",
+            origin=source_reference,
+            title=f"Daily Report {title_suffix}",
+            content=content,
+            captured_at=detected_date or datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            metadata=metadata,
+        )
+
+    def _relative_path(self, path: Path) -> str:
+        try:
+            return path.relative_to(self.reports_dir).as_posix()
+        except ValueError:
+            return path.name
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    stdout: str
+    stderr: str
+    returncode: int
+
+
+CommandRunner = Callable[[list[str]], CommandResult]
+SlackApiCaller = Callable[[str, dict[str, Any]], dict[str, Any]]
+GraphApiCaller = Callable[[str, dict[str, Any]], dict[str, Any]]
+
+
+def run_command(command: list[str]) -> CommandResult:
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    return CommandResult(
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+        returncode=completed.returncode,
+    )
+
+
+class UnconfiguredSourceAdapter:
+    def __init__(self, name: str, message: str) -> None:
+        self.name = name
+        self.message = message
+
+    def discover(self) -> list[RawSource]:
+        raise SourceAccessError(self.message)
+
+    def fetch(self, source_id: str) -> RawSource:
+        raise SourceAccessError(self.message)
+
+
+class GitHubSourceAdapter:
+    name = "github"
+
+    def __init__(self, repo: str, limit: int = 20, command_runner: CommandRunner | None = None) -> None:
+        self.repo = repo
+        self.limit = limit
+        self.command_runner = command_runner or run_command
+
+    def discover(self) -> list[RawSource]:
+        payload = self._run_gh(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                self.repo,
+                "--state",
+                "all",
+                "--limit",
+                str(self.limit),
+                "--json",
+                "number,title,body,state,author,createdAt,updatedAt,url,labels",
+            ]
+        )
+        if not isinstance(payload, list):
+            raise SourceAccessError("Failed to parse GitHub pull request list.")
+        return [self._build_raw_source(pr) for pr in payload if isinstance(pr, dict)]
+
+    def fetch(self, source_id: str) -> RawSource:
+        pr_number = self._parse_source_id(source_id)
+        payload = self._run_gh(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(pr_number),
+                "--repo",
+                self.repo,
+                "--json",
+                "number,title,body,state,author,createdAt,updatedAt,url,labels,files",
+            ],
+            missing_error=SourceNotFoundError(f"Pull request not found: {source_id}"),
+        )
+        if not isinstance(payload, dict):
+            raise SourceAccessError(f"Failed to parse GitHub pull request detail for {source_id}.")
+        return self._build_raw_source(payload)
+
+    def _run_gh(
+        self,
+        command: list[str],
+        *,
+        missing_error: SourceAdapterError | None = None,
+    ) -> Any:
+        try:
+            result = self.command_runner(command)
+        except FileNotFoundError as exc:
+            raise SourceAccessError("GitHub CLI 'gh' is not installed or not available on PATH.") from exc
+
+        if result.returncode != 0:
+            stderr = sanitize_command_error(result.stderr)
+            lowered = stderr.lower()
+            if missing_error is not None and ("not found" in lowered or "could not resolve to a pull request" in lowered):
+                raise missing_error
+            if "not logged into any hosts" in lowered or "authentication failed" in lowered:
+                raise SourceAccessError("GitHub CLI is not authenticated. Run 'gh auth login' and try again.")
+            if "could not resolve to a repository" in lowered or "repository not found" in lowered:
+                raise SourceAccessError(f"GitHub repository is not accessible: {self.repo}")
+            if stderr:
+                raise SourceAccessError(f"GitHub CLI command failed: {stderr}")
+            raise SourceAccessError("GitHub CLI command failed.")
+
+        try:
+            return json.loads(result.stdout or "null")
+        except json.JSONDecodeError as exc:
+            raise SourceAccessError("Failed to parse JSON output from GitHub CLI.") from exc
+
+    def _parse_source_id(self, source_id: str) -> int:
+        prefix = f"github:{self.repo}:pr:"
+        if not source_id.startswith(prefix):
+            raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+        number_text = source_id.removeprefix(prefix)
+        if not number_text.isdigit():
+            raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+        return int(number_text)
+
+    def _build_raw_source(self, payload: dict[str, Any]) -> RawSource:
+        number = int(payload.get("number", 0))
+        title = str(payload.get("title", "")).strip()
+        body = str(payload.get("body") or "").strip()
+        state = str(payload.get("state", "unknown")).lower()
+        url = str(payload.get("url", "")).strip()
+        created_at = str(payload.get("createdAt", "")).strip()
+        updated_at = str(payload.get("updatedAt", "")).strip()
+        author = self._extract_author(payload.get("author"))
+        labels = self._extract_labels(payload.get("labels"))
+        changed_files = self._extract_changed_files(payload.get("files"))
+        pr_title = f"PR #{number} {title}".strip()
+
+        metadata: dict[str, Any] = {
+            "repo": self.repo,
+            "kind": "pull_request",
+            "number": number,
+            "state": state,
+            "url": url,
+            "author": author,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "labels": labels,
+            "source_reference": f"github:{self.repo}#{number}",
+        }
+        if changed_files:
+            metadata["changed_files"] = changed_files
+
+        return RawSource(
+            id=f"github:{self.repo}:pr:{number}",
+            source_type="github",
+            origin=f"github:{self.repo}#{number}",
+            title=pr_title,
+            content=self._build_content(
+                title=pr_title,
+                body=body,
+                state=state,
+                author=author,
+                created_at=created_at,
+                updated_at=updated_at,
+                url=url,
+                labels=labels,
+                changed_files=changed_files,
+            ),
+            captured_at=updated_at or datetime.now().isoformat(timespec="seconds"),
+            metadata=metadata,
+        )
+
+    def _build_content(
+        self,
+        *,
+        title: str,
+        body: str,
+        state: str,
+        author: str,
+        created_at: str,
+        updated_at: str,
+        url: str,
+        labels: list[str],
+        changed_files: list[str],
+    ) -> str:
+        lines = [
+            title,
+            f"Repository: {self.repo}",
+            f"State: {state}",
+            f"Author: {author or 'unknown'}",
+            f"Created At: {created_at or 'unknown'}",
+            f"Updated At: {updated_at or 'unknown'}",
+            f"Labels: {', '.join(labels) if labels else 'none'}",
+            f"URL: {url or 'unknown'}",
+            "Body:",
+            body or "(empty)",
+        ]
+        if changed_files:
+            lines.append("Changed Files:")
+            lines.extend(f"- {item}" for item in changed_files)
+        return "\n".join(lines)
+
+    def _extract_author(self, author: Any) -> str:
+        if isinstance(author, dict):
+            login = author.get("login")
+            if isinstance(login, str) and login.strip():
+                return login.strip()
+            name = author.get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+        if isinstance(author, str):
+            return author.strip()
+        return ""
+
+    def _extract_labels(self, labels: Any) -> list[str]:
+        if not isinstance(labels, list):
+            return []
+        result: list[str] = []
+        for item in labels:
+            if isinstance(item, dict):
+                name = item.get("name")
+                if isinstance(name, str) and name.strip():
+                    result.append(name.strip())
+            elif isinstance(item, str) and item.strip():
+                result.append(item.strip())
+        return result
+
+    def _extract_changed_files(self, files: Any) -> list[str]:
+        if not isinstance(files, list):
+            return []
+        result: list[str] = []
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            if not path:
+                continue
+            additions = item.get("additions")
+            deletions = item.get("deletions")
+            if isinstance(additions, int) and isinstance(deletions, int):
+                result.append(f"{path} (+{additions} -{deletions})")
+            else:
+                result.append(path)
+        return result
+
+
+def call_slack_api(method: str, params: dict[str, Any], *, token: str) -> dict[str, Any]:
+    encoded = urlencode({key: value for key, value in params.items() if value is not None}).encode("utf-8")
+    request = Request(
+        url=f"https://slack.com/api/{method}",
+        data=encoded,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request) as response:
+            payload = response.read().decode("utf-8")
+    except HTTPError as exc:
+        message = sanitize_slack_error_message(exc.read().decode("utf-8", errors="replace") or str(exc))
+        if exc.code == 429:
+            raise SourceAccessError("Slack API rate limit exceeded.") from exc
+        raise SourceAccessError(f"Slack API request failed: {message or 'http error'}") from exc
+    except URLError as exc:
+        raise SourceAccessError(f"Slack API request failed: {sanitize_slack_error_message(str(exc.reason))}") from exc
+
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise SourceAccessError("Failed to parse Slack API JSON response.") from exc
+    if not isinstance(parsed, dict):
+        raise SourceAccessError("Failed to parse Slack API response.")
+    return parsed
+
+
+def call_graph_api(path: str, params: dict[str, Any], *, token: str) -> dict[str, Any]:
+    query = urlencode({key: value for key, value in params.items() if value is not None})
+    url = f"https://graph.microsoft.com{path}"
+    if query:
+        url = f"{url}?{query}"
+    request = Request(
+        url=url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    try:
+        with urlopen(request) as response:
+            payload = response.read().decode("utf-8")
+    except HTTPError as exc:
+        message = sanitize_graph_error_message(exc.read().decode("utf-8", errors="replace") or str(exc))
+        if exc.code == 401:
+            raise SourceAccessError("Microsoft Graph token is invalid or expired.") from exc
+        if exc.code == 403:
+            raise SourceAccessError("Microsoft Graph access denied for the requested Teams channel.") from exc
+        if exc.code == 404:
+            raise SourceNotFoundError("Teams team, channel, or message was not found.") from exc
+        if exc.code == 429:
+            raise SourceAccessError("Microsoft Graph API rate limit exceeded.") from exc
+        raise SourceAccessError(f"Microsoft Graph API request failed: {message or 'http error'}") from exc
+    except URLError as exc:
+        raise SourceAccessError(f"Microsoft Graph API request failed: {sanitize_graph_error_message(str(exc.reason))}") from exc
+
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise SourceAccessError("Failed to parse Microsoft Graph API JSON response.") from exc
+    if not isinstance(parsed, dict):
+        raise SourceAccessError("Failed to parse Microsoft Graph API response.")
+    return parsed
+
+
+class SlackSourceAdapter:
+    name = "slack"
+
+    def __init__(
+        self,
+        channel: str,
+        limit: int = 20,
+        token_env: str = "SLACK_BOT_TOKEN",
+        oldest: str | None = None,
+        latest: str | None = None,
+        api_caller: SlackApiCaller | None = None,
+    ) -> None:
+        self.channel = channel
+        self.limit = limit
+        self.token_env = token_env
+        self.oldest = oldest
+        self.latest = latest
+        self._api_caller = api_caller
+
+    def discover(self) -> list[RawSource]:
+        messages = self._fetch_messages()
+        return [self._build_raw_source(message) for message in messages]
+
+    def fetch(self, source_id: str) -> RawSource:
+        for source in self.discover():
+            if source.id == source_id:
+                return source
+        raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+
+    def _fetch_messages(self) -> list[dict[str, Any]]:
+        payload = self._call_api(
+            "conversations.history",
+            {
+                "channel": self.channel,
+                "limit": self.limit,
+                "oldest": self.oldest,
+                "latest": self.latest,
+                "inclusive": True,
+            },
+        )
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            raise SourceAccessError("Slack API did not return a valid message list.")
+        return [item for item in messages if isinstance(item, dict) and str(item.get("ts") or "").strip()]
+
+    def _call_api(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        token = self._resolve_token()
+        caller = self._api_caller or (lambda api_method, api_params: call_slack_api(api_method, api_params, token=token))
+        try:
+            payload = caller(method, params)
+        except SourceAdapterError:
+            raise
+        except Exception as exc:
+            raise SourceAccessError(f"Slack API request failed: {sanitize_slack_error_message(str(exc))}") from exc
+        if not isinstance(payload, dict):
+            raise SourceAccessError("Failed to parse Slack API response.")
+        if payload.get("ok") is False:
+            raise self._build_api_error(payload)
+        return payload
+
+    def _resolve_token(self) -> str:
+        token = os.getenv(self.token_env, "").strip()
+        if not token:
+            raise SourceAccessError(f"Slack token environment variable is not set: {self.token_env}")
+        return token
+
+    def _build_api_error(self, payload: dict[str, Any]) -> SourceAdapterError:
+        error_code = str(payload.get("error") or "unknown_error").strip()
+        normalized_error_code = error_code.split()[0] if error_code else "unknown_error"
+        if normalized_error_code in {"channel_not_found", "message_not_found"}:
+            return SourceNotFoundError(f"Slack resource not found: {normalized_error_code}")
+        if normalized_error_code in {"not_in_channel", "missing_scope", "invalid_auth", "not_authed", "account_inactive"}:
+            return SourceAccessError(f"Slack API access denied: {normalized_error_code}")
+        if normalized_error_code == "ratelimited":
+            return SourceAccessError("Slack API rate limit exceeded.")
+        return SourceAccessError(f"Slack API request failed: {sanitize_slack_error_message(error_code)}")
+
+    def _build_raw_source(self, payload: dict[str, Any]) -> RawSource:
+        ts = str(payload.get("ts") or "").strip()
+        thread_ts = str(payload.get("thread_ts") or "").strip()
+        user = str(payload.get("user") or payload.get("bot_id") or "").strip()
+        text = str(payload.get("text") or "").strip()
+        subtype = str(payload.get("subtype") or "").strip()
+        message_datetime = slack_ts_to_datetime(ts)
+        permalink = self._get_permalink(ts)
+
+        metadata: dict[str, Any] = {
+            "channel": self.channel,
+            "kind": "message",
+            "ts": ts,
+            "thread_ts": thread_ts,
+            "user": user,
+            "created_at": message_datetime.isoformat(timespec="seconds"),
+        }
+        if subtype:
+            metadata["subtype"] = subtype
+        if permalink:
+            metadata["permalink"] = permalink
+
+        return RawSource(
+            id=f"slack:{self.channel}:{ts}",
+            source_type="slack",
+            origin=f"slack:{self.channel}:{ts}",
+            title=f"Slack message {message_datetime.strftime('%Y-%m-%d %H:%M')}",
+            content=self._build_content(
+                text=text,
+                channel=self.channel,
+                ts=ts,
+                thread_ts=thread_ts,
+                user=user,
+                created_at=message_datetime.isoformat(timespec="seconds"),
+                subtype=subtype,
+                permalink=permalink,
+            ),
+            captured_at=message_datetime.isoformat(timespec="seconds"),
+            metadata=metadata,
+        )
+
+    def _get_permalink(self, message_ts: str) -> str:
+        try:
+            payload = self._call_api("chat.getPermalink", {"channel": self.channel, "message_ts": message_ts})
+        except SourceAdapterError:
+            return ""
+        permalink = payload.get("permalink")
+        if isinstance(permalink, str):
+            return permalink.strip()
+        return ""
+
+    def _build_content(
+        self,
+        *,
+        text: str,
+        channel: str,
+        ts: str,
+        thread_ts: str,
+        user: str,
+        created_at: str,
+        subtype: str,
+        permalink: str,
+    ) -> str:
+        lines = [
+            f"Slack Channel: {channel}",
+            f"Message TS: {ts}",
+            f"Thread TS: {thread_ts or 'none'}",
+            f"User: {user or 'unknown'}",
+            f"Created At: {created_at}",
+            f"Subtype: {subtype or 'none'}",
+        ]
+        if permalink:
+            lines.append(f"Permalink: {permalink}")
+        lines.extend(["Text:", text or "(empty)"])
+        return "\n".join(lines)
+
+
+class TeamsSourceAdapter:
+    name = "teams"
+
+    def __init__(
+        self,
+        team_id: str,
+        channel_id: str,
+        limit: int = 20,
+        token_env: str = "MS_GRAPH_TOKEN",
+        oldest: datetime | None = None,
+        latest: datetime | None = None,
+        api_caller: GraphApiCaller | None = None,
+    ) -> None:
+        self.team_id = team_id
+        self.channel_id = channel_id
+        self.limit = limit
+        self.token_env = token_env
+        self.oldest = oldest
+        self.latest = latest
+        self._api_caller = api_caller
+
+    def discover(self) -> list[RawSource]:
+        messages = self._fetch_messages()
+        return [self._build_raw_source(message) for message in messages]
+
+    def fetch(self, source_id: str) -> RawSource:
+        for source in self.discover():
+            if source.id == source_id:
+                return source
+        raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+
+    def _fetch_messages(self) -> list[dict[str, Any]]:
+        payload = self._call_api(
+            f"/v1.0/teams/{self.team_id}/channels/{self.channel_id}/messages",
+            {"$top": min(self.limit, 50)},
+        )
+        messages = payload.get("value")
+        if not isinstance(messages, list):
+            raise SourceAccessError("Microsoft Graph API did not return a valid Teams message list.")
+        filtered = [item for item in messages if isinstance(item, dict) and str(item.get("id") or "").strip()]
+        return [item for item in filtered if self._is_within_range(str(item.get("createdDateTime") or "").strip())]
+
+    def _call_api(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        token = self._resolve_token()
+        caller = self._api_caller or (lambda api_path, api_params: call_graph_api(api_path, api_params, token=token))
+        try:
+            payload = caller(path, params)
+        except SourceAdapterError:
+            raise
+        except Exception as exc:
+            raise SourceAccessError(f"Microsoft Graph API request failed: {sanitize_graph_error_message(str(exc))}") from exc
+        if not isinstance(payload, dict):
+            raise SourceAccessError("Failed to parse Microsoft Graph API response.")
+        if "error" in payload:
+            raise self._build_api_error(payload)
+        return payload
+
+    def _resolve_token(self) -> str:
+        token = os.getenv(self.token_env, "").strip()
+        if not token:
+            raise SourceAccessError(f"Microsoft Graph token environment variable is not set: {self.token_env}")
+        return token
+
+    def _build_api_error(self, payload: dict[str, Any]) -> SourceAdapterError:
+        raw_error = payload.get("error")
+        if isinstance(raw_error, dict):
+            code = str(raw_error.get("code") or "unknown_error").strip()
+            message = str(raw_error.get("message") or "").strip()
+        else:
+            code = str(raw_error or "unknown_error").strip()
+            message = ""
+        normalized = code.lower()
+        full_message = sanitize_graph_error_message(f"{code} {message}".strip())
+        if normalized in {"itemnotfound", "notfound", "erroritemnotfound"}:
+            return SourceNotFoundError(f"Teams resource not found: {code}")
+        if normalized in {"unauthenticated", "invalidauthenticationtoken", "accesstokenexpired"}:
+            return SourceAccessError("Microsoft Graph token is invalid or expired.")
+        if normalized in {"forbidden", "accessdenied", "authorization_requestdenied"}:
+            return SourceAccessError("Microsoft Graph access denied for the requested Teams channel.")
+        if normalized in {"toomanyrequests", "throttledrequest"}:
+            return SourceAccessError("Microsoft Graph API rate limit exceeded.")
+        return SourceAccessError(f"Microsoft Graph API request failed: {full_message or code}")
+
+    def _is_within_range(self, created_at: str) -> bool:
+        if not created_at:
+            return True
+        created = teams_datetime_to_datetime(created_at)
+        if self.oldest is not None and created < self.oldest:
+            return False
+        if self.latest is not None and created > self.latest:
+            return False
+        return True
+
+    def _build_raw_source(self, payload: dict[str, Any]) -> RawSource:
+        message_id = str(payload.get("id") or "").strip()
+        created_at = str(payload.get("createdDateTime") or "").strip()
+        last_modified_at = str(payload.get("lastModifiedDateTime") or "").strip()
+        subject = str(payload.get("subject") or "").strip()
+        summary = str(payload.get("summary") or "").strip()
+        importance = str(payload.get("importance") or "normal").strip() or "normal"
+        message_type = str(payload.get("messageType") or "message").strip() or "message"
+        reply_to_id = str(payload.get("replyToId") or "").strip()
+        web_url = str(payload.get("webUrl") or "").strip()
+        body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+        body_content_type = str(body.get("contentType") or "text").strip() or "text"
+        body_content = str(body.get("content") or "").strip()
+        body_text = teams_html_body_to_text(body_content) if body_content_type.lower() == "html" else normalize_text_whitespace(html.unescape(body_content))
+        from_user_id, from_user_display_name = self._extract_from_user(payload.get("from"))
+        captured_at = created_at or datetime.now().astimezone().isoformat(timespec="seconds")
+        created_datetime = teams_datetime_to_datetime(captured_at)
+
+        metadata: dict[str, Any] = {
+            "team_id": self.team_id,
+            "channel_id": self.channel_id,
+            "kind": "channel_message",
+            "message_id": message_id,
+            "reply_to_id": reply_to_id or None,
+            "created_at": created_at,
+            "last_modified_at": last_modified_at,
+            "message_type": message_type,
+            "importance": importance,
+            "from_user_id": from_user_id,
+            "from_user_display_name": from_user_display_name,
+            "body_content_type": body_content_type,
+        }
+        if subject:
+            metadata["subject"] = subject
+        if summary:
+            metadata["summary"] = summary
+        if web_url:
+            metadata["web_url"] = web_url
+
+        return RawSource(
+            id=f"teams:{self.team_id}:{self.channel_id}:{message_id}",
+            source_type="teams",
+            origin=f"teams:{self.team_id}:{self.channel_id}:{message_id}",
+            title=f"Teams message {created_datetime.strftime('%Y-%m-%d %H:%M')}",
+            content=self._build_content(
+                message_id=message_id,
+                created_at=created_at,
+                last_modified_at=last_modified_at,
+                subject=subject,
+                summary=summary,
+                importance=importance,
+                message_type=message_type,
+                reply_to_id=reply_to_id,
+                web_url=web_url,
+                from_user_id=from_user_id,
+                from_user_display_name=from_user_display_name,
+                body_content_type=body_content_type,
+                body_text=body_text,
+            ),
+            captured_at=created_at or created_datetime.isoformat(timespec="seconds"),
+            metadata=metadata,
+        )
+
+    def _extract_from_user(self, from_value: Any) -> tuple[str, str]:
+        if not isinstance(from_value, dict):
+            return "", ""
+        user = from_value.get("user")
+        if not isinstance(user, dict):
+            return "", ""
+        user_id = str(user.get("id") or "").strip()
+        display_name = str(user.get("displayName") or "").strip()
+        return user_id, display_name
+
+    def _build_content(
+        self,
+        *,
+        message_id: str,
+        created_at: str,
+        last_modified_at: str,
+        subject: str,
+        summary: str,
+        importance: str,
+        message_type: str,
+        reply_to_id: str,
+        web_url: str,
+        from_user_id: str,
+        from_user_display_name: str,
+        body_content_type: str,
+        body_text: str,
+    ) -> str:
+        lines = [
+            f"Teams Team ID: {self.team_id}",
+            f"Teams Channel ID: {self.channel_id}",
+            f"Message ID: {message_id}",
+            f"Created At: {created_at or 'unknown'}",
+            f"Last Modified At: {last_modified_at or 'unknown'}",
+            f"Subject: {subject or 'none'}",
+            f"Summary: {summary or 'none'}",
+            f"Importance: {importance or 'normal'}",
+            f"Message Type: {message_type or 'message'}",
+            f"Reply To ID: {reply_to_id or 'none'}",
+            f"From User ID: {from_user_id or 'unknown'}",
+            f"From User Display Name: {from_user_display_name or 'unknown'}",
+            f"Body Content Type: {body_content_type or 'text'}",
+        ]
+        if web_url:
+            lines.append(f"Web URL: {web_url}")
+        lines.extend(["Text:", body_text or "(empty)"])
+        return "\n".join(lines)
+
+
+class SourceAdapterRegistry:
+    def __init__(self) -> None:
+        self._adapters: dict[str, SourceAdapter] = {}
+
+    def register(self, adapter: SourceAdapter) -> None:
+        self._adapters[adapter.name] = adapter
+
+    def get(self, name: str) -> SourceAdapter:
+        adapter = self._adapters.get(name)
+        if adapter is None:
+            raise typer.BadParameter(f"Unknown source adapter: {name}")
+        return adapter
+
+    def list(self) -> list[str]:
+        return sorted(self._adapters)
+
+
 def read_yaml(path: Path) -> Any:
     if not path.exists():
         raise typer.BadParameter(f"Missing required file: {path}")
     with path.open("r", encoding="utf-8") as file:
         return yaml.safe_load(file) or {}
+
+
+def parse_optional_frontmatter(text: str) -> dict[str, Any]:
+    if not text.startswith("---\n"):
+        return {"frontmatter": {}, "content": text}
+    match = re.match(r"(?s)^---\n(.*?)\n---\n?", text)
+    if not match:
+        return {"frontmatter": {}, "content": text}
+    raw_frontmatter = match.group(1)
+    try:
+        parsed = yaml.safe_load(raw_frontmatter) or {}
+    except yaml.YAMLError:
+        return {"frontmatter": {}, "content": text}
+    if not isinstance(parsed, dict):
+        return {"frontmatter": {}, "content": text}
+    return {
+        "frontmatter": parsed,
+        "content": text[match.end() :].lstrip("\n"),
+    }
+
+
+def source_intelligence_rules_dir() -> Path:
+    return REPO_ROOT / ".codex" / "source-intelligence" / "rules"
+
+
+def rule_file_path(filename: str) -> Path:
+    return source_intelligence_rules_dir() / filename
+
+
+@lru_cache(maxsize=32)
+def load_rule_document(path_text: str) -> dict[str, Any]:
+    path = Path(path_text)
+    value = read_yaml(path)
+    if not isinstance(value, dict):
+        raise typer.BadParameter(f"Invalid source intelligence rule: {path}")
+    return value
+
+
+def load_rule_file(filename: str) -> dict[str, Any]:
+    return load_rule_document(str(rule_file_path(filename)))
+
+
+def load_category_rules() -> dict[str, Any]:
+    return load_rule_file("categories.yaml")
+
+
+def load_noise_rules() -> dict[str, Any]:
+    return load_rule_file("noise.yaml")
+
+
+def load_ai_tool_rules() -> dict[str, Any]:
+    return load_rule_file("ai_tools.yaml")
+
+
+def load_technology_rules() -> dict[str, Any]:
+    return load_rule_file("technologies.yaml")
+
+
+def load_confidence_rules() -> dict[str, Any]:
+    return load_rule_file("confidence.yaml")
+
+
+def load_evidence_rules() -> dict[str, Any]:
+    return load_rule_file("evidence.yaml")
+
+
+def load_sensitive_label_rules() -> dict[str, Any]:
+    return load_rule_file("sensitive_labels.yaml")
 
 
 def redact_sensitive_text(message: str) -> tuple[str, list[dict[str, str]]]:
@@ -107,12 +1037,21 @@ def redact_sensitive_text(message: str) -> tuple[str, list[dict[str, str]]]:
     return redacted, findings
 
 
+def sanitize_command_error(message: str) -> str:
+    sanitized = re.sub(r"\b[A-Z][A-Z0-9_]*=[^\s]+", "[REDACTED_ENV]", message)
+    sanitized = re.sub(r"\bgh[pousr]_[A-Za-z0-9_]+\b", "[REDACTED_GITHUB_TOKEN]", sanitized)
+    sanitized = re.sub(r"\bgithub_pat_[A-Za-z0-9_]+\b", "[REDACTED_GITHUB_TOKEN]", sanitized)
+    sanitized, _ = redact_sensitive_text(sanitized)
+    return sanitized.strip()
+
+
 def build_guard_report(
     *,
     timestamp: str,
     event_path: Path,
     findings: list[dict[str, str]],
     redacted_message: str,
+    action_label: str = "add-log",
 ) -> str:
     grouped: dict[str, int] = {}
     for finding in findings:
@@ -124,7 +1063,7 @@ def build_guard_report(
         for finding in findings
     ]
 
-    return f"""## {timestamp} add-log redaction
+    return f"""## {timestamp} {action_label} redaction
 
 ### Event
 - {display_path(event_path)}
@@ -153,6 +1092,29 @@ def append_guard_report(report: str, report_date: str) -> Path:
         content = "# Guard Review\n\n" + report.rstrip() + "\n"
     report_path.write_text(content, encoding="utf-8")
     return report_path
+
+
+def maybe_write_guard_report(
+    *,
+    timestamp: str,
+    report_date: str,
+    event_path: Path,
+    findings: list[dict[str, str]],
+    redacted_message: str,
+    action_label: str,
+) -> Path | None:
+    if not findings:
+        return None
+    return append_guard_report(
+        build_guard_report(
+            timestamp=timestamp,
+            event_path=event_path,
+            findings=findings,
+            redacted_message=redacted_message,
+            action_label=action_label,
+        ),
+        report_date=report_date,
+    )
 
 
 def read_yaml_files(directory: Path) -> list[dict[str, Any]]:
@@ -243,7 +1205,7 @@ def read_text_sources(directory: Path) -> list[dict[str, str]]:
             continue
         items.append(
             {
-                "path": str(path.relative_to(ROOT)),
+                "path": display_path(path),
                 "content": path.read_text(encoding="utf-8"),
             }
         )
@@ -590,6 +1552,52 @@ def resolve_input_path(path_text: str) -> Path:
     raise typer.BadParameter(f"Missing file: {path_text}")
 
 
+def resolve_optional_input_path(path_text: str, *, root_candidates: list[Path] | None = None) -> Path:
+    candidate = Path(path_text).expanduser()
+    possible_paths = [candidate]
+    if not candidate.is_absolute():
+        possible_paths.extend(base / candidate for base in (root_candidates or [ROOT, REPO_ROOT]))
+    for path in possible_paths:
+        if path.exists():
+            return path.resolve()
+    return ((root_candidates or [ROOT])[0] / candidate).resolve()
+
+
+def resolve_output_path(path_text: str) -> Path:
+    candidate = Path(path_text).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (ROOT / candidate).resolve()
+
+
+def build_source_adapter_registry(github_repo: str | None = None) -> SourceAdapterRegistry:
+    registry = SourceAdapterRegistry()
+    registry.register(FileSourceAdapter(DATA_DIR / "raw_sources"))
+    registry.register(DailyReportSourceAdapter(DAILY_REPORTS_DIR))
+    registry.register(
+        UnconfiguredSourceAdapter(
+            "slack",
+            "Slack adapter requires a channel and token env. Use inspect-slack-source or normalize-slack-source.",
+        )
+    )
+    registry.register(
+        UnconfiguredSourceAdapter(
+            "teams",
+            "Teams adapter requires a team id, channel id, and token env. Use inspect-teams-source or normalize-teams-source.",
+        )
+    )
+    if github_repo:
+        registry.register(GitHubSourceAdapter(repo=github_repo))
+    else:
+        registry.register(
+            UnconfiguredSourceAdapter(
+                "github",
+                "GitHub adapter requires a repository. Use inspect-github-source or normalize-github-source with --repo.",
+            )
+        )
+    return registry
+
+
 def extract_target_from_proposal(proposal_text: str) -> str:
     match = re.search(r"^## Target\s*\n(.+)$", proposal_text, flags=re.MULTILINE)
     if not match:
@@ -609,6 +1617,14 @@ def extract_patch_block(proposal_text: str) -> str:
     if not match:
         raise typer.BadParameter("Proposal is missing Patch Proposal code block.")
     return match.group(1).strip("\n")
+
+
+def infer_review_date(path: Path, proposal_text: str = "") -> str:
+    for candidate in [str(path), proposal_text]:
+        match = re.search(r"(20\d{2}-\d{2}-\d{2})", candidate)
+        if match:
+            return match.group(1)
+    return date.today().strftime("%Y-%m-%d")
 
 
 def normalize_patch_block(patch_block: str) -> str:
@@ -888,6 +1904,7 @@ def apply_skill_review_file(proposal_path: Path) -> dict[str, str]:
     source_key = display_path(proposal_path)
     target_path = resolve_input_path(target_text)
     target_text_current = target_path.read_text(encoding="utf-8")
+    applied_date = infer_review_date(proposal_path, proposal_text)
 
     applied_records = read_applied_skill_reviews()
     is_already_applied = any(
@@ -916,7 +1933,7 @@ def apply_skill_review_file(proposal_path: Path) -> dict[str, str]:
         appended_block = "\n\n".join(appended_parts).rstrip() + "\n"
     target_path.write_text(appended_block, encoding="utf-8")
 
-    applied_dir = SKILL_REVIEWS_APPLIED_DIR / date.today().strftime("%Y-%m-%d")
+    applied_dir = SKILL_REVIEWS_APPLIED_DIR / applied_date
     applied_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(proposal_path, applied_dir / proposal_path.name)
 
@@ -931,7 +1948,7 @@ def apply_skill_review_file(proposal_path: Path) -> dict[str, str]:
     append_applied_skill_review_record(
         {
             "agent": agent,
-            "applied_at": date.today().strftime("%Y-%m-%d"),
+            "applied_at": applied_date,
             "normalized_summary": normalized_summary,
             "patch_hash": patch_hash,
             "patch_summary": summary,
@@ -1011,7 +2028,31 @@ def markdown_to_pdf(markdown_path: Path, output_path: Path, theme: str = "forest
     )
 
 
+def build_resume_agent_hook_context(trigger: str) -> dict[str, Any]:
+    return {
+        "trigger": trigger,
+        "status": "design_only",
+        "reads": [
+            display_path(SOURCE_SYNC_DIR),
+            display_path(EVENTS_DIR),
+            display_path(GENERATED_DIR / "resume.md"),
+            display_path(CHANGELOG_PATH),
+        ],
+        "contract": {
+            "normalizer_scope": "raw source -> canonical event / evidence",
+            "resume_agent_scope": "canonical event から resume 向けの選別・要約・反映判断を行う",
+            "activation_points": ["generate-md", "issue"],
+        },
+    }
+
+
+def run_resume_agent_hook(trigger: str) -> dict[str, Any]:
+    # Hook contract only. Resume-oriented filtering is intentionally not executed here yet.
+    return build_resume_agent_hook_context(trigger)
+
+
 def generate_markdown_file() -> Path:
+    run_resume_agent_hook("generate-md")
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     output_path = GENERATED_DIR / "resume.md"
     output_path.write_text(render_markdown(), encoding="utf-8")
@@ -1123,7 +2164,1142 @@ def append_changelog(entry: str) -> None:
     CHANGELOG_PATH.write_text(content, encoding="utf-8")
 
 
+def source_rule_list(name: str) -> list[str]:
+    merged_rules = {}
+    for loader in [load_category_rules, load_technology_rules, load_ai_tool_rules, load_confidence_rules, load_evidence_rules]:
+        merged_rules.update(loader())
+    value = merged_rules.get(name, [])
+    return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def source_rule_map(name: str) -> dict[str, list[str]]:
+    merged_rules = {}
+    for loader in [load_category_rules, load_noise_rules, load_evidence_rules]:
+        merged_rules.update(loader())
+    value = merged_rules.get(name, {})
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): [str(item) for item in items]
+        for key, items in value.items()
+        if isinstance(items, list)
+    }
+
+
+def detect_source_type(path: Path, text: str) -> str:
+    lowered = f"{path.name} {text[:200]}".lower()
+    if "daily_report:" in str(path) or "daily report" in lowered:
+        return "daily_report"
+    source_type_keywords = source_rule_map("source_type_keywords")
+    for source_type, keywords in source_type_keywords.items():
+        if any(keyword.lower() in lowered for keyword in keywords):
+            return source_type
+    return str(load_evidence_rules().get("default_source_type", "text_note"))
+
+
+def extract_source_date(path: Path, text: str, fallback: str = "") -> str:
+    candidates = [
+        path.stem,
+        path.name,
+        text.splitlines()[0] if text.splitlines() else "",
+        fallback,
+    ]
+    for candidate in candidates:
+        match = re.search(r"(20\d{2})[-_/](\d{2})[-_/](\d{2})", candidate)
+        if match:
+            return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+        compact = re.search(r"(20\d{2})(\d{2})(\d{2})", candidate)
+        if compact:
+            return f"{compact.group(1)}-{compact.group(2)}-{compact.group(3)}"
+    if path.exists():
+        return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d")
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def detect_date_string(value: str) -> str | None:
+    if not value:
+        return None
+    for pattern in [
+        r"(20\d{2})[-_/](\d{1,2})[-_/](\d{1,2})",
+        r"(20\d{2})(\d{2})(\d{2})",
+        r"(20\d{2})年(\d{1,2})月(\d{1,2})日",
+    ]:
+        match = re.search(pattern, value)
+        if not match:
+            continue
+        year, month, day = match.group(1), match.group(2), match.group(3)
+        try:
+            return date(int(year), int(month), int(day)).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
+def detect_daily_report_date(
+    path: Path,
+    raw_text: str,
+    content_text: str,
+    frontmatter: dict[str, Any],
+    *,
+    fallback: str = "",
+) -> str:
+    frontmatter_date = frontmatter.get("date")
+    if isinstance(frontmatter_date, (date, datetime)):
+        return frontmatter_date.strftime("%Y-%m-%d")
+    if isinstance(frontmatter_date, str):
+        detected = detect_date_string(frontmatter_date)
+        if detected:
+            return detected
+
+    candidates = [path.name, path.stem]
+    lines = content_text.splitlines()
+    heading_line = next((line.strip() for line in lines if line.strip().startswith("#")), "")
+    first_content_line = next((line.strip() for line in lines if line.strip()), "")
+    candidates.extend([heading_line, first_content_line, raw_text[:120], fallback])
+    for candidate in candidates:
+        detected = detect_date_string(str(candidate))
+        if detected:
+            return detected
+
+    if path.exists():
+        return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d")
+    if fallback:
+        detected = detect_date_string(fallback)
+        if detected:
+            return detected
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def infer_daily_report_kind(path: Path, frontmatter: dict[str, Any], content: str) -> str:
+    type_value = frontmatter.get("type")
+    if isinstance(type_value, str) and type_value.strip():
+        return type_value.strip()
+
+    lowered = f"{path.name}\n{content[:400]}".lower()
+    keyword_map = {
+        "daily": ["daily", "日報", "今日やったこと"],
+        "weekly": ["weekly", "週次"],
+        "worklog": ["worklog", "作業ログ", "作業メモ"],
+        "retrospective": ["retrospective", "ふりかえり", "振り返り", "kpt"],
+        "memo": ["memo", "note", "メモ"],
+    }
+    for kind, keywords in keyword_map.items():
+        if any(keyword in lowered for keyword in keywords):
+            return kind
+    return "freestyle_report"
+
+
+def split_source_lines(text: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        for fragment in re.split(r"[•・;；]", raw_line):
+            normalized = re.sub(r"\s+", " ", fragment).strip(" -\t")
+            if normalized:
+                lines.append(normalized)
+    return lines
+
+
+def detect_noise_categories(text: str) -> list[str]:
+    lowered = text.lower()
+    noise_keywords = source_rule_map("noise_keywords")
+    categories = [
+        category
+        for category, keywords in noise_keywords.items()
+        if any(keyword.lower() in lowered for keyword in keywords)
+    ]
+    return sorted(set(categories))
+
+
+def has_work_signal(text: str) -> bool:
+    lowered = text.lower()
+    if any(keyword.lower() in lowered for keyword in source_rule_list("decision_keywords")):
+        return True
+    if any(keyword.lower() in lowered for keyword in source_rule_list("improvement_keywords")):
+        return True
+    category_keywords = source_rule_map("category_keywords")
+    if any(keyword.lower() in lowered for keywords in category_keywords.values() for keyword in keywords):
+        return True
+    if re.search(r"(やった|進めた|進行|対応|実施|修正|見直し|見直した|分離|整理|決めた|決定|受けた|もらった|追加|追加した|試した)", text):
+        return True
+    return False
+
+
+def is_noise_only_line(text: str) -> bool:
+    lowered = text.lower()
+    if not lowered.strip():
+        return True
+    noise_keywords = source_rule_map("noise_keywords")
+    signal_keywords = source_rule_list("tag_keywords") + source_rule_list("tool_keywords")
+    if any(keyword.lower() in lowered for keywords in noise_keywords.values() for keyword in keywords):
+        has_signal = any(keyword.lower() in lowered for keyword in signal_keywords)
+        has_work_term = has_work_signal(text)
+        return not (has_signal or has_work_term)
+    return False
+
+
+def detect_category(text: str) -> str:
+    lowered = text.lower()
+    categories = source_rule_list("categories")
+    category_keywords = source_rule_map("category_keywords")
+    scores: dict[str, int] = {category: 0 for category in categories}
+    for category, keywords in category_keywords.items():
+        for keyword in keywords:
+            if keyword.lower() in lowered:
+                scores[category] += 1
+    if is_noise_only_line(text):
+        return "noise"
+    best = max((item for item in scores.items() if item[0] != "noise"), key=lambda item: item[1], default=("communication", 0))
+    return best[0] if best[1] > 0 else "communication"
+
+
+def extract_keyword_matches(text: str, keywords: list[str]) -> list[str]:
+    found: list[str] = []
+    lowered = text.lower()
+    for keyword in keywords:
+        if keyword.lower() in lowered:
+            found.append(keyword)
+    return found
+
+
+def summarize_line(text: str) -> str:
+    summary = re.sub(r"\[[^\]]+\]", "", text).strip()
+    return summary[:140]
+
+
+def collect_focus_terms(text: str, tags: list[str]) -> list[str]:
+    tool_keywords = set(source_rule_list("tool_keywords"))
+    terms = [tag for tag in tags if tag not in {"PR", "Issue", "GitHub", "Slack"} and tag not in tool_keywords]
+    inferred_terms = [
+        ("Resolver", "resolver"),
+        ("GraphQL", "graphql"),
+        ("Connector", "connector"),
+        ("Slack", "slack"),
+        ("schema", "schema"),
+        ("Fragment", "fragment"),
+    ]
+    lowered = text.lower()
+    for label, keyword in inferred_terms:
+        if keyword in lowered:
+            terms.append(label)
+    if "設計" in text:
+        terms.append("設計")
+    if "リファクタ" in text:
+        terms.append("リファクタ")
+    return dedupe_preserving_order(terms)
+
+
+def build_subject_phrase(text: str, tags: list[str]) -> str:
+    focus_terms = collect_focus_terms(text, tags)
+    if not focus_terms:
+        return ""
+    if "GraphQL" in focus_terms and "Resolver" in focus_terms:
+        return "GraphQL Resolver"
+    if "Slack" in focus_terms and "Connector" in focus_terms:
+        return "Slack Connector"
+    return " / ".join(focus_terms[:2])
+
+
+def is_low_signal_line(text: str, *, tags: list[str], tools: list[str]) -> bool:
+    if not tools:
+        return False
+    subject = build_subject_phrase(text, tags)
+    if subject:
+        return False
+    if has_work_signal(text):
+        return False
+    return bool(re.search(r"(便利|聞いた|相談した|試した|メモ|気になる)", text))
+
+
+def canonicalize_action(text: str, *, category: str, tags: list[str], tools: list[str]) -> str | None:
+    subject = build_subject_phrase(text, tags)
+    has_pr = "PR" in text or "pr" in text.lower()
+
+    if is_low_signal_line(text, tags=tags, tools=tools):
+        return None
+    if "指摘" in text and re.search(r"(受けた|もらった|反映)", text):
+        prefix = "PRレビューで" if has_pr else ""
+        if "設計" in text:
+            return f"{prefix}設計指摘を受領"
+        return f"{prefix}レビュー指摘を受領"
+    if "分離" in text:
+        if subject:
+            return f"{subject}分離を実施"
+        return "責務分離を実施"
+    if ("方針" in text or "方針を" in text) and re.search(r"(決めた|決定|整理|見直し)", text):
+        if "リファクタ" in text:
+            return "リファクタ方針を決定"
+        if subject:
+            return f"{subject}の方針を決定"
+        return "実装方針を決定"
+    if "レビュー" in text and re.search(r"(受けた|もらった|実施)", text):
+        if has_pr:
+            return "PRレビューを実施"
+        return "レビュー対応を実施"
+    if tools and re.search(r"(聞いた|相談した|整理)", text):
+        tool_name = tools[0]
+        if subject:
+            return f"{tool_name}で{subject}の論点を整理"
+        return None
+    if subject:
+        if category == "design":
+            return f"{subject}の設計検討を実施"
+        if category == "review":
+            return f"{subject}のレビュー対応を実施"
+        if category == "refactor":
+            return f"{subject}のリファクタリングを実施"
+        if category == "learning":
+            return f"{subject}の技術調査を実施"
+        return f"{subject}関連の実装・調査を実施"
+    if category == "review":
+        return "レビュー対応を実施"
+    if category == "refactor":
+        return "リファクタリングを実施"
+    if category == "design":
+        return "設計検討を実施"
+    if category == "testing":
+        return "検証を実施"
+    if category == "operation":
+        return "運用対応を実施"
+    if category == "learning":
+        return "技術調査を実施"
+    return summarize_line(text)
+
+
+def extract_decision_text(text: str) -> str | None:
+    patterns = source_rule_list("decision_keywords")
+    if not any(pattern in text for pattern in patterns):
+        return None
+    if "リファクタ" in text and re.search(r"(方針|決めた|決定)", text):
+        return "リファクタ方針を決定"
+    return summarize_line(text)
+
+
+def extract_improvement_text(text: str) -> str | None:
+    patterns = source_rule_list("improvement_keywords")
+    if not any(pattern in text for pattern in patterns):
+        return None
+    if "リファクタ" in text:
+        return "リファクタリング方針を整理"
+    return summarize_line(text)
+
+
+def confidence_level_from_score(score: int, rules: dict[str, Any]) -> str:
+    levels = rules.get("levels", {})
+    if not isinstance(levels, dict):
+        return "low"
+    ordered_levels = sorted(
+        (
+            (str(level), int(config.get("min_score", 0)))
+            for level, config in levels.items()
+            if isinstance(config, dict)
+        ),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    for level, min_score in ordered_levels:
+        if score >= min_score:
+            return level
+    return "low"
+
+
+def confidence_signal_value(rules: dict[str, Any], group: str, key: str, default: int = 0) -> int:
+    values = rules.get(group, {})
+    if not isinstance(values, dict):
+        return default
+    return int(values.get(key, default))
+
+
+def known_source_types() -> set[str]:
+    return {"file", "github", "slack", "teams", "daily_report"}
+
+
+def calculate_source_confidence(
+    *,
+    raw_source: RawSource,
+    source_type: str,
+    actions: list[str],
+    decisions: list[str],
+    improvements: list[str],
+    tags: list[str],
+    tools: list[str],
+    noise_removed: list[str],
+    evidence_basis: str,
+    guard_findings: list[dict[str, str]],
+) -> SourceConfidence:
+    rules = load_confidence_rules()
+    score = 0
+    reasons: list[str] = []
+    normalized_source_type = source_type if source_type in known_source_types() else "unknown"
+    source_type_weights = rules.get("source_type_weights", {})
+    if isinstance(source_type_weights, dict):
+        score += int(source_type_weights.get(normalized_source_type, source_type_weights.get("unknown", 0)))
+    reasons.append(f"source_type:{normalized_source_type}")
+
+    metadata_values = [value for value in raw_source.metadata.values() if value not in ("", None, [], {})]
+    if raw_source.id.strip():
+        score += confidence_signal_value(rules, "signals", "source_id_present")
+        reasons.append("source_id:present")
+    else:
+        score += confidence_signal_value(rules, "penalties", "missing_source_id")
+        reasons.append("source_id:missing")
+
+    if actions:
+        score += confidence_signal_value(rules, "signals", "action_present")
+        reasons.append(f"actions:{len(actions)}")
+        if len(actions) >= 2:
+            score += confidence_signal_value(rules, "signals", "action_multiple_bonus")
+            reasons.append("actions:multiple")
+    else:
+        score += confidence_signal_value(rules, "penalties", "no_actions")
+        reasons.append("actions:0")
+
+    if decisions:
+        score += confidence_signal_value(rules, "signals", "decision_present")
+        reasons.append(f"decisions:{len(decisions)}")
+    if improvements:
+        score += confidence_signal_value(rules, "signals", "improvement_present")
+        reasons.append(f"improvements:{len(improvements)}")
+    if not decisions and not improvements:
+        score += confidence_signal_value(rules, "penalties", "no_decisions_or_improvements")
+        reasons.append("decisions_improvements:0")
+
+    if tags:
+        score += confidence_signal_value(rules, "signals", "tags_present")
+        reasons.append(f"tags:{len(tags)}")
+    if tools:
+        score += confidence_signal_value(rules, "signals", "tools_present")
+        reasons.append(f"tools:{len(tools)}")
+
+    if evidence_basis and evidence_basis != "有意な技術イベントなし":
+        score += confidence_signal_value(rules, "signals", "evidence_present")
+        reasons.append("evidence:present")
+    else:
+        score += confidence_signal_value(rules, "penalties", "weak_evidence")
+        reasons.append("evidence:weak")
+
+    if metadata_values:
+        score += confidence_signal_value(rules, "signals", "metadata_present")
+        reasons.append(f"metadata:{len(metadata_values)}")
+        if len(metadata_values) >= 5:
+            score += confidence_signal_value(rules, "signals", "metadata_rich_bonus")
+            reasons.append("metadata:rich")
+
+    if normalized_source_type in {"github", "daily_report"}:
+        score += confidence_signal_value(rules, "signals", "structured_source_bonus")
+        reasons.append("source:structured")
+
+    if normalized_source_type == "unknown":
+        score += confidence_signal_value(rules, "penalties", "unknown_source_type")
+        reasons.append("penalty:unknown_source_type")
+
+    if "low_signal" in noise_removed:
+        score += confidence_signal_value(rules, "penalties", "low_signal_noise")
+        reasons.append("noise:low_signal")
+    if len(noise_removed) >= 3:
+        score += confidence_signal_value(rules, "penalties", "many_noise_categories")
+        reasons.append(f"noise_removed:{len(noise_removed)}")
+
+    if len(guard_findings) >= 3:
+        score += confidence_signal_value(rules, "penalties", "redaction_heavy")
+        reasons.append(f"redaction_findings:{len(guard_findings)}")
+
+    if len(raw_source.content.strip()) < 20:
+        score += confidence_signal_value(rules, "penalties", "short_content")
+        reasons.append("content:short")
+
+    score = max(0, min(100, score))
+    reasons.append(f"score:{score}")
+    return SourceConfidence(
+        level=confidence_level_from_score(score, rules),
+        score=score,
+        reasons=reasons,
+    )
+
+
+def build_source_reference_path(raw_source: RawSource) -> Path:
+    origin_path = Path(raw_source.origin)
+    if origin_path.exists():
+        return origin_path
+    source_reference = raw_source.metadata.get("source_reference")
+    if isinstance(source_reference, str) and source_reference.strip():
+        return Path(source_reference.strip())
+    metadata_path = raw_source.metadata.get("path")
+    if isinstance(metadata_path, str):
+        return Path(metadata_path)
+    return Path(raw_source.title or raw_source.id)
+
+
+def build_canonical_event_from_raw_source(raw_source: RawSource) -> dict[str, Any]:
+    source_path = build_source_reference_path(raw_source)
+    raw_text = raw_source.content
+    redacted_text, findings = redact_sensitive_text(raw_text)
+    date_text = extract_source_date(source_path, redacted_text, fallback=raw_source.captured_at)
+    source_type = raw_source.source_type or detect_source_type(source_path, redacted_text)
+    lines = split_source_lines(redacted_text)
+
+    kept_lines: list[str] = []
+    actions: list[str] = []
+    decisions: list[str] = []
+    improvements: list[str] = []
+    tags: list[str] = []
+    tools: list[str] = []
+    noise_categories: list[str] = []
+    categories = source_rule_list("categories")
+    category_scores: dict[str, int] = {category: 0 for category in categories}
+
+    for line in lines:
+        category = detect_category(line)
+        category_scores[category] += 1
+        line_noise = detect_noise_categories(line)
+        if category == "noise" or is_noise_only_line(line):
+            noise_categories.extend(line_noise or ["small_talk"])
+            continue
+
+        tags_for_line = extract_keyword_matches(line, source_rule_list("tag_keywords"))
+        tools_for_line = extract_keyword_matches(line, source_rule_list("tool_keywords"))
+        if not has_work_signal(line) and not tags_for_line and not tools_for_line:
+            noise_categories.extend(line_noise or ["low_signal"])
+            continue
+        action_text = canonicalize_action(line, category=category, tags=tags_for_line, tools=tools_for_line)
+        if action_text is None:
+            noise_categories.extend(line_noise or ["low_signal"])
+            continue
+
+        if line_noise:
+            noise_categories.extend(line_noise)
+
+        kept_lines.append(line)
+        actions.append(action_text)
+        decision = extract_decision_text(line)
+        if decision:
+            decisions.append(decision)
+        improvement = extract_improvement_text(line)
+        if improvement:
+            improvements.append(improvement)
+        tags.extend(tags_for_line)
+        tools.extend(tools_for_line)
+
+    dominant_category = max(
+        ((name, score) for name, score in category_scores.items() if name != "noise"),
+        key=lambda item: item[1],
+        default=("communication", 0),
+    )[0]
+    summary = actions[0] if actions else "作業上有意な技術イベントを抽出できなかった"
+    evidence_basis = " / ".join(dedupe_preserving_order(actions[:3] + decisions[:2] + improvements[:2]))
+    if not evidence_basis and raw_source.source_type not in {"github", "slack", "teams", "daily_report"}:
+        evidence_basis = " / ".join(kept_lines[:3]) if kept_lines else "有意な技術イベントなし"
+    if not evidence_basis:
+        evidence_basis = "有意な技術イベントなし"
+    evidence_excerpt = summarize_line(evidence_basis)[:200]
+    confidence = calculate_source_confidence(
+        raw_source=raw_source,
+        source_type=source_type,
+        actions=dedupe_preserving_order(actions),
+        decisions=dedupe_preserving_order(decisions),
+        improvements=dedupe_preserving_order(improvements),
+        tags=dedupe_preserving_order(tags),
+        tools=dedupe_preserving_order(tools),
+        noise_removed=dedupe_preserving_order(sorted(set(noise_categories))),
+        evidence_basis=evidence_basis,
+        guard_findings=findings,
+    )
+
+    return {
+        "schema": str(load_evidence_rules().get("schema", "canonical_event_v0")),
+        "date": date_text,
+        "source_id": raw_source.id,
+        "source_type": source_type,
+        "category": dominant_category if kept_lines else "noise",
+        "summary": summary,
+        "actions": dedupe_preserving_order(actions),
+        "decisions": dedupe_preserving_order(decisions),
+        "improvements": dedupe_preserving_order(improvements),
+        "tags": dedupe_preserving_order(tags),
+        "tools": dedupe_preserving_order(tools),
+        "noise_removed": dedupe_preserving_order(sorted(set(noise_categories))),
+        "confidence": confidence.level,
+        "confidence_reasons": confidence.reasons,
+        "evidence": [
+            {
+                "kind": str(load_evidence_rules().get("excerpt_kind", "redacted_excerpt")),
+                "detail": evidence_excerpt,
+            },
+            {
+                "kind": str(load_evidence_rules().get("source_reference_kind", "source_reference")),
+                "detail": source_path.name,
+            },
+        ],
+        "_guard_findings": findings,
+        "_source_path": source_path,
+        "_raw_source": raw_source,
+    }
+
+
+def build_canonical_event(source_path: Path) -> dict[str, Any]:
+    resolved = source_path.resolve()
+    stat = resolved.stat()
+    raw_source = RawSource(
+        id=resolved.name,
+        source_type="file",
+        origin=str(resolved),
+        title=resolved.name,
+        content=resolved.read_text(encoding="utf-8"),
+        captured_at=datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        metadata={
+            "path": str(resolved),
+            "size_bytes": stat.st_size,
+        },
+    )
+    return build_canonical_event_from_raw_source(raw_source)
+
+
+def normalize_raw_sources(
+    raw_sources: list[RawSource],
+    *,
+    action_label: str,
+) -> list[Path]:
+    grouped_events: dict[str, list[dict[str, Any]]] = {}
+
+    for raw_source in raw_sources:
+        event = build_canonical_event_from_raw_source(raw_source)
+        grouped_events.setdefault(event["date"], []).append(event)
+        maybe_write_guard_report(
+            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            report_date=event["date"],
+            event_path=SOURCE_SYNC_DIR / f"{event['date']}.md",
+            findings=event["_guard_findings"],
+            redacted_message="\n".join(item["detail"] for item in event["evidence"] if item["kind"] == "redacted_excerpt"),
+            action_label=action_label,
+        )
+
+    output_paths: list[Path] = []
+    for target_date, events in sorted(grouped_events.items()):
+        output_paths.append(write_source_sync_file(target_date, events))
+    return output_paths
+
+
+def format_canonical_event(event: dict[str, Any]) -> str:
+    def render_list(values: list[str]) -> str:
+        return "\n".join(f"  - {value}" for value in values) if values else "  - none"
+
+    def render_evidence(items: list[dict[str, str]]) -> str:
+        if not items:
+            return "  - kind: none\n    detail: none"
+        return "\n".join(
+            [
+                "  - kind: " + str(item.get("kind", "unknown")) + "\n    detail: " + str(item.get("detail", ""))
+                for item in items
+            ]
+        )
+
+    lines = [
+        "- schema: " + str(event["schema"]),
+        "- date: " + str(event["date"]),
+        "  source_id: " + str(event.get("source_id", "unknown")),
+        "  source_type: " + str(event["source_type"]),
+        "  category: " + str(event["category"]),
+        "  summary: " + str(event["summary"]),
+        "  actions:",
+        render_list(event["actions"]),
+        "  decisions:",
+        render_list(event["decisions"]),
+        "  improvements:",
+        render_list(event["improvements"]),
+        "  tags:",
+        render_list(event["tags"]),
+        "  tools:",
+        render_list(event["tools"]),
+        "  noise_removed:",
+        render_list(event["noise_removed"]),
+        "  confidence: " + str(event["confidence"]),
+        "  confidence_reasons:",
+        render_list(event.get("confidence_reasons", [])),
+        "  evidence:",
+        render_evidence(event["evidence"]),
+    ]
+    return "\n".join(lines)
+
+
+CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+
+def parse_source_sync_scalar(block: str, field: str) -> str | None:
+    match = re.search(rf"(?m)^  {re.escape(field)}:\s*(.+?)\s*$", block)
+    if not match:
+        if field in {"schema", "date"}:
+            match = re.search(rf"(?m)^- {re.escape(field)}:\s*(.+?)\s*$", block)
+    if not match:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
+def parse_source_sync_list_field(block: str, field: str) -> list[str]:
+    lines = block.splitlines()
+    prefix = f"  {field}:"
+    items: list[str] = []
+    in_section = False
+    for line in lines:
+        if line == prefix:
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        if re.match(r"^  [a-z_]+:", line):
+            break
+        if line.startswith("  - "):
+            value = line[4:].strip()
+            if value and value.lower() != "none":
+                items.append(value)
+    return items
+
+
+def parse_source_sync_evidence_details(block: str) -> list[str]:
+    lines = block.splitlines()
+    details: list[str] = []
+    in_evidence = False
+    for line in lines:
+        if line == "  evidence:":
+            in_evidence = True
+            continue
+        if not in_evidence:
+            continue
+        if re.match(r"^  [a-z_]+:", line):
+            break
+        if line.startswith("    detail: "):
+            detail = line.removeprefix("    detail: ").strip()
+            if detail and detail.lower() != "none":
+                details.append(detail)
+    return details
+
+
+def parse_source_sync_event_block(block: str, *, path: Path, event_index: int) -> SourceTimelineItem | None:
+    event_date = parse_source_sync_scalar(block, "date") or path.stem
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_date):
+        return None
+    summary = parse_source_sync_scalar(block, "summary")
+    if not summary:
+        return None
+    source_id = parse_source_sync_scalar(block, "source_id") or f"unknown:{path.stem}:{event_index}"
+    source_type = parse_source_sync_scalar(block, "source_type") or source_id.split(":", 1)[0]
+    category = parse_source_sync_scalar(block, "category") or "unknown"
+    confidence = (parse_source_sync_scalar(block, "confidence") or "low").lower()
+    if confidence not in CONFIDENCE_ORDER:
+        confidence = "low"
+    return SourceTimelineItem(
+        date=event_date,
+        source_id=source_id,
+        source_type=source_type,
+        category=category,
+        summary=summary,
+        actions=parse_source_sync_list_field(block, "actions"),
+        decisions=parse_source_sync_list_field(block, "decisions"),
+        improvements=parse_source_sync_list_field(block, "improvements"),
+        tags=parse_source_sync_list_field(block, "tags"),
+        tools=parse_source_sync_list_field(block, "tools"),
+        confidence=confidence,
+        confidence_reasons=parse_source_sync_list_field(block, "confidence_reasons"),
+        evidence_details=parse_source_sync_evidence_details(block),
+        source_sync_path=display_path(path.resolve()),
+        event_index=event_index,
+    )
+
+
+def parse_source_sync_file(path: Path) -> list[SourceTimelineItem]:
+    _, blocks = read_source_sync_event_blocks(path)
+    items: list[SourceTimelineItem] = []
+    for event_index, block in enumerate(blocks, start=1):
+        item = parse_source_sync_event_block(block, path=path, event_index=event_index)
+        if item is not None:
+            items.append(item)
+    return items
+
+
+def source_timeline_sort_key(item: SourceTimelineItem) -> tuple[date, int, str, int]:
+    parsed_date = datetime.strptime(item.date, "%Y-%m-%d").date()
+    return (
+        parsed_date,
+        -CONFIDENCE_ORDER.get(item.confidence, -1),
+        item.source_type,
+        item.event_index,
+    )
+
+
+def read_source_timeline_items(source_sync_dir: Path) -> list[SourceTimelineItem]:
+    if not source_sync_dir.exists():
+        return []
+    items: list[SourceTimelineItem] = []
+    for path in sorted(source_sync_dir.glob("*.md")):
+        items.extend(parse_source_sync_file(path))
+    return sorted(
+        items,
+        key=lambda item: (
+            -source_timeline_sort_key(item)[0].toordinal(),
+            source_timeline_sort_key(item)[1],
+            source_timeline_sort_key(item)[2],
+            source_timeline_sort_key(item)[3],
+        ),
+    )
+
+
+def filter_source_timeline_items(
+    items: list[SourceTimelineItem],
+    *,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    source_type: str | None = None,
+    confidence: str | None = None,
+    min_confidence: str | None = None,
+    limit: int | None = None,
+) -> list[SourceTimelineItem]:
+    filtered: list[SourceTimelineItem] = []
+    min_rank = CONFIDENCE_ORDER.get(min_confidence.lower(), 0) if min_confidence else None
+    exact_confidence = confidence.lower() if confidence else None
+    exact_source_type = source_type.lower() if source_type else None
+    for item in items:
+        if from_date and item.date < from_date:
+            continue
+        if to_date and item.date > to_date:
+            continue
+        if exact_source_type and item.source_type.lower() != exact_source_type:
+            continue
+        if exact_confidence and item.confidence != exact_confidence:
+            continue
+        if min_rank is not None and CONFIDENCE_ORDER.get(item.confidence, -1) < min_rank:
+            continue
+        filtered.append(item)
+        if limit is not None and len(filtered) >= limit:
+            break
+    return filtered
+
+
+def render_source_timeline_markdown(items: list[SourceTimelineItem], *, source_sync_dir: Path) -> str:
+    lines = [
+        "# Source Timeline",
+        "",
+        f"Generated from `{display_path(source_sync_dir.resolve())}`.",
+        "",
+    ]
+    current_date: str | None = None
+    for item in items:
+        if item.date != current_date:
+            if current_date is not None:
+                lines.append("")
+            current_date = item.date
+            lines.extend([f"## {item.date}", ""])
+        lines.append(f"### {item.confidence} · {item.source_type} · {item.category}")
+        lines.append("")
+        lines.append(f"**{item.summary}**")
+        lines.append("")
+        lines.append(f"- source_id: `{item.source_id}`")
+        lines.append(f"- source_sync: `{item.source_sync_path}` (Event {item.event_index})")
+        lines.append("- actions:")
+        lines.extend([f"  - {value}" for value in item.actions] or ["  - none"])
+        lines.append("- decisions:")
+        lines.extend([f"  - {value}" for value in item.decisions] or ["  - none"])
+        lines.append("- improvements:")
+        lines.extend([f"  - {value}" for value in item.improvements] or ["  - none"])
+        lines.append(f"- tags: {', '.join(item.tags) if item.tags else 'none'}")
+        lines.append(f"- tools: {', '.join(item.tools) if item.tools else 'none'}")
+        lines.append("- evidence:")
+        lines.extend([f"  - {value}" for value in item.evidence_details] or ["  - none"])
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_source_timeline_jsonl(items: list[SourceTimelineItem]) -> str:
+    rows = []
+    for item in items:
+        rows.append(
+            json.dumps(
+                {
+                    "date": item.date,
+                    "source_id": item.source_id,
+                    "source_type": item.source_type,
+                    "category": item.category,
+                    "summary": item.summary,
+                    "actions": item.actions,
+                    "decisions": item.decisions,
+                    "improvements": item.improvements,
+                    "tags": item.tags,
+                    "tools": item.tools,
+                    "confidence": item.confidence,
+                    "confidence_reasons": item.confidence_reasons,
+                    "evidence_details": item.evidence_details,
+                    "source_sync_path": item.source_sync_path,
+                    "event_index": item.event_index,
+                },
+                ensure_ascii=False,
+            )
+        )
+    return "\n".join(rows) + ("\n" if rows else "")
+
+
+def build_source_timeline(
+    *,
+    source_sync_dir: Path = SOURCE_SYNC_DIR,
+    output_path: Path = SOURCE_TIMELINE_PATH,
+    jsonl_output_path: Path | None = SOURCE_TIMELINE_JSONL_PATH,
+) -> tuple[Path, Path | None, int]:
+    items = read_source_timeline_items(source_sync_dir)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        render_source_timeline_markdown(items, source_sync_dir=source_sync_dir),
+        encoding="utf-8",
+    )
+    written_jsonl_path: Path | None = None
+    if jsonl_output_path is not None:
+        jsonl_output_path.parent.mkdir(parents=True, exist_ok=True)
+        jsonl_output_path.write_text(render_source_timeline_jsonl(items), encoding="utf-8")
+        written_jsonl_path = jsonl_output_path
+    return output_path, written_jsonl_path, len(items)
+
+
+def inspect_source_timeline_items(
+    *,
+    source_sync_dir: Path = SOURCE_SYNC_DIR,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    source_type: str | None = None,
+    confidence: str | None = None,
+    min_confidence: str | None = None,
+    limit: int | None = None,
+) -> list[SourceTimelineItem]:
+    items = read_source_timeline_items(source_sync_dir)
+    return filter_source_timeline_items(
+        items,
+        from_date=from_date,
+        to_date=to_date,
+        source_type=source_type,
+        confidence=confidence,
+        min_confidence=min_confidence,
+        limit=limit,
+    )
+
+
+def read_source_sync_event_blocks(output_path: Path) -> tuple[str | None, list[str]]:
+    if not output_path.exists():
+        return None, []
+    content = output_path.read_text(encoding="utf-8")
+    date_match = re.search(r"(?m)^date:\s*(\d{4}-\d{2}-\d{2})\s*$", content)
+    event_matches = list(re.finditer(r"(?m)^## Event \d+\s*$", content))
+    if not event_matches:
+        return (date_match.group(1) if date_match else None), []
+    blocks: list[str] = []
+    for index, match in enumerate(event_matches):
+        start = match.end()
+        end = event_matches[index + 1].start() if index + 1 < len(event_matches) else len(content)
+        blocks.append(content[start:end].strip())
+    return (date_match.group(1) if date_match else None), blocks
+
+
+def extract_source_id_from_event_block(block: str) -> str | None:
+    match = re.search(r"(?m)^  source_id:\s*(.+?)\s*$", block)
+    if not match:
+        return None
+    source_id = match.group(1).strip()
+    return source_id or None
+
+
+def write_source_sync_file(target_date: str, events: list[dict[str, Any]]) -> Path:
+    SOURCE_SYNC_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = SOURCE_SYNC_DIR / f"{target_date}.md"
+    _, existing_blocks = read_source_sync_event_blocks(output_path)
+    existing_source_ids = {source_id for block in existing_blocks if (source_id := extract_source_id_from_event_block(block))}
+    merged_blocks = list(existing_blocks)
+    for event in events:
+        source_id = str(event.get("source_id") or "").strip()
+        if source_id and source_id in existing_source_ids:
+            continue
+        block = format_canonical_event(event)
+        merged_blocks.append(block)
+        if source_id:
+            existing_source_ids.add(source_id)
+    body = [
+        "# Canonical Events",
+        "",
+        f"date: {target_date}",
+        "",
+    ]
+    for index, block in enumerate(merged_blocks, start=1):
+        body.append(f"## Event {index}")
+        body.append(block)
+        body.append("")
+    output_path.write_text("\n".join(body).rstrip() + "\n", encoding="utf-8")
+    return output_path
+
+
+def normalize_source_file(file_path: str | Path) -> Path:
+    source_path = resolve_input_path(str(file_path))
+    event = build_canonical_event(source_path)
+    output_path = write_source_sync_file(event["date"], [event])
+    report_path = maybe_write_guard_report(
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        report_date=event["date"],
+        event_path=output_path,
+        findings=event["_guard_findings"],
+        redacted_message="\n".join(item["detail"] for item in event["evidence"] if item["kind"] == "redacted_excerpt"),
+        action_label="normalize-source",
+    )
+    if report_path is not None:
+        typer.echo(f"Guard report: {report_path.relative_to(ROOT)}")
+    return output_path
+
+
+def normalize_all_sources() -> list[Path]:
+    adapter = build_source_adapter_registry().get("file")
+    return normalize_raw_sources(adapter.discover(), action_label="normalize-sources")
+
+
+def daily_report_root_for_file(path: Path) -> Path:
+    resolved = path.resolve()
+    reports_root = DAILY_REPORTS_DIR.resolve()
+    try:
+        resolved.relative_to(reports_root)
+        return reports_root
+    except ValueError:
+        return resolved.parent
+
+
+def inspect_daily_report_file(file_path: str | Path) -> RawSource:
+    resolved = resolve_input_path(str(file_path))
+    adapter = DailyReportSourceAdapter(daily_report_root_for_file(resolved))
+    return adapter._build_raw_source(resolved)
+
+
+def normalize_daily_report_file(file_path: str | Path) -> Path:
+    raw_source = inspect_daily_report_file(file_path)
+    output_paths = normalize_raw_sources([raw_source], action_label="import-daily-report")
+    return output_paths[0]
+
+
+def normalize_daily_reports_dir(directory: str | Path, limit: int | None = None) -> list[Path]:
+    resolved_dir = resolve_optional_input_path(
+        str(directory),
+        root_candidates=[ROOT, REPO_ROOT],
+    )
+    adapter = DailyReportSourceAdapter(resolved_dir, limit=limit)
+    return normalize_raw_sources(adapter.discover(), action_label="import-daily-reports")
+
+
+def normalize_github_sources(repo: str, limit: int = 20, command_runner: CommandRunner | None = None) -> list[Path]:
+    adapter = GitHubSourceAdapter(repo=repo, limit=limit, command_runner=command_runner)
+    return normalize_raw_sources(adapter.discover(), action_label="normalize-github-source")
+
+
+def parse_iso_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone()
+
+
+def parse_cli_datetime(value: str | None) -> str | None:
+    parsed = parse_iso_datetime(value)
+    if parsed is None:
+        return None
+    return slack_datetime_to_api_ts(parsed)
+
+
+def slack_ts_to_datetime(value: str) -> datetime:
+    try:
+        timestamp = float(value)
+    except ValueError as exc:
+        raise SourceAccessError(f"Invalid Slack timestamp: {value}") from exc
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone()
+
+
+def slack_datetime_to_api_ts(value: datetime) -> str:
+    return f"{value.timestamp():.6f}"
+
+
+def sanitize_slack_error_message(message: str) -> str:
+    sanitized = sanitize_command_error(message)
+    sanitized = re.sub(r"xox[baprs]-[A-Za-z0-9-]+", "[REDACTED_SLACK_TOKEN]", sanitized)
+    return sanitized.strip()
+
+
+def teams_datetime_to_datetime(value: str) -> datetime:
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise SourceAccessError(f"Invalid Teams datetime: {value}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone()
+
+
+def teams_html_body_to_text(value: str) -> str:
+    text = html.unescape(value or "")
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</?(?:div|p|li|ul|ol|span|body|html)\b[^>]*>", " ", text)
+    text = re.sub(r"(?i)</?at\b[^>]*>", " ", text)
+    text = re.sub(r"(?is)<[^>]+>", " ", text)
+    return normalize_text_whitespace(text)
+
+
+def normalize_text_whitespace(value: str) -> str:
+    collapsed = re.sub(r"[ \t\r\f\v]+", " ", value)
+    collapsed = re.sub(r"\s*\n\s*", "\n", collapsed)
+    collapsed = re.sub(r"\n{2,}", "\n", collapsed)
+    return collapsed.strip()
+
+
+def sanitize_graph_error_message(message: str) -> str:
+    sanitized = sanitize_command_error(message)
+    sanitized = re.sub(r"\beyJ[a-zA-Z0-9_\-]+=*\.[a-zA-Z0-9_\-]+=*(?:\.[a-zA-Z0-9_\-+/=]*)?\b", "[REDACTED_MS_GRAPH_TOKEN]", sanitized)
+    return sanitized.strip()
+
+
+def normalize_slack_sources(
+    channel: str,
+    *,
+    limit: int = 20,
+    token_env: str = "SLACK_BOT_TOKEN",
+    oldest: str | None = None,
+    latest: str | None = None,
+    api_caller: SlackApiCaller | None = None,
+) -> list[Path]:
+    adapter = SlackSourceAdapter(
+        channel=channel,
+        limit=limit,
+        token_env=token_env,
+        oldest=oldest,
+        latest=latest,
+        api_caller=api_caller,
+    )
+    return normalize_raw_sources(adapter.discover(), action_label="normalize-slack-source")
+
+
+def normalize_teams_sources(
+    team_id: str,
+    channel_id: str,
+    *,
+    limit: int = 20,
+    token_env: str = "MS_GRAPH_TOKEN",
+    oldest: datetime | None = None,
+    latest: datetime | None = None,
+    api_caller: GraphApiCaller | None = None,
+) -> list[Path]:
+    adapter = TeamsSourceAdapter(
+        team_id=team_id,
+        channel_id=channel_id,
+        limit=limit,
+        token_env=token_env,
+        oldest=oldest,
+        latest=latest,
+        api_caller=api_caller,
+    )
+    return normalize_raw_sources(adapter.discover(), action_label="normalize-teams-source")
+
+
 def issue_resume(title: str, note: str, theme: str = "forest") -> Path:
+    run_resume_agent_hook("issue")
     markdown_path = generate_markdown_file()
     pdf_path = generate_pdf_file(theme=theme)
 
@@ -1160,16 +3336,15 @@ def add_log(message: str = typer.Option("", "--message", "-m", help="Log message
     }
     with path.open("w", encoding="utf-8") as file:
         yaml.safe_dump(payload, file, allow_unicode=True, sort_keys=False)
-    if findings:
-        report_path = append_guard_report(
-            build_guard_report(
-                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                event_path=path,
-                findings=findings,
-                redacted_message=redacted_message,
-            ),
-            report_date=today,
-        )
+    report_path = maybe_write_guard_report(
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        report_date=today,
+        event_path=path,
+        findings=findings,
+        redacted_message=redacted_message,
+        action_label="add-log",
+    )
+    if report_path is not None:
         typer.echo(f"Guard report: {report_path.relative_to(ROOT)}")
     typer.echo(f"Added log: {path.relative_to(ROOT)}")
 
@@ -1192,11 +3367,357 @@ def analyze() -> None:
             typer.echo(f"- {name}")
 
 
+@app.command("build-source-timeline")
+def build_source_timeline_command(
+    source_sync_dir: str = typer.Option(str(SOURCE_SYNC_DIR), "--source-sync-dir", help="Directory that stores source_sync markdown files"),
+    output: str = typer.Option(str(SOURCE_TIMELINE_PATH), "--output", help="Markdown output path"),
+    jsonl_output: str | None = typer.Option(str(SOURCE_TIMELINE_JSONL_PATH), "--jsonl-output", help="Optional JSONL output path"),
+) -> None:
+    """Build a derived source timeline from source_sync markdown files."""
+    resolved_source_sync_dir = resolve_optional_input_path(source_sync_dir, root_candidates=[ROOT, REPO_ROOT])
+    resolved_output = resolve_output_path(output)
+    resolved_jsonl_output = resolve_output_path(jsonl_output) if jsonl_output else None
+    output_path, jsonl_path, item_count = build_source_timeline(
+        source_sync_dir=resolved_source_sync_dir,
+        output_path=resolved_output,
+        jsonl_output_path=resolved_jsonl_output,
+    )
+    typer.echo(f"Built source timeline: {display_path(output_path)}")
+    typer.echo(f"items: {item_count}")
+    if jsonl_path is not None:
+        typer.echo(f"JSONL: {display_path(jsonl_path)}")
+
+
+@app.command("inspect-source-timeline")
+def inspect_source_timeline(
+    source_sync_dir: str = typer.Option(str(SOURCE_SYNC_DIR), "--source-sync-dir", help="Directory that stores source_sync markdown files"),
+    from_date: str | None = typer.Option(None, "--from", help="Inclusive start date in YYYY-MM-DD"),
+    to_date: str | None = typer.Option(None, "--to", help="Inclusive end date in YYYY-MM-DD"),
+    source_type: str | None = typer.Option(None, "--source-type", help="Filter by source type"),
+    confidence: str | None = typer.Option(None, "--confidence", help="Filter by exact confidence"),
+    min_confidence: str | None = typer.Option(None, "--min-confidence", help="Filter by minimum confidence: low, medium, high"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of items to show"),
+) -> None:
+    """Inspect timeline items derived from source_sync markdown files."""
+    resolved_source_sync_dir = resolve_optional_input_path(source_sync_dir, root_candidates=[ROOT, REPO_ROOT])
+    items = inspect_source_timeline_items(
+        source_sync_dir=resolved_source_sync_dir,
+        from_date=from_date,
+        to_date=to_date,
+        source_type=source_type,
+        confidence=confidence,
+        min_confidence=min_confidence,
+        limit=limit,
+    )
+    typer.echo("Source Timeline")
+    typer.echo(f"items: {len(items)}")
+    if not items:
+        return
+    for item in items:
+        typer.echo("")
+        typer.echo(f"{item.date} [{item.confidence}] {item.source_type} {item.category}")
+        typer.echo(f"- {item.summary}")
+        typer.echo(f"  source_id: {item.source_id}")
+
+
 @app.command("generate-md")
 def generate_md() -> None:
     """Generate Markdown resume from YAML data and Jinja2 template."""
     output_path = generate_markdown_file()
     typer.echo(f"Generated Markdown: {output_path.relative_to(ROOT)}")
+
+
+@app.command("normalize-source")
+def normalize_source(
+    file: str = typer.Option(..., "--file", "-f", help="Raw source text file to normalize."),
+) -> None:
+    """Normalize one raw source text file into a canonical event markdown file."""
+    output_path = normalize_source_file(file)
+    typer.echo(f"Normalized source: {output_path.relative_to(ROOT)}")
+
+
+@app.command("normalize-sources")
+def normalize_sources() -> None:
+    """Normalize all raw source text files under data/raw_sources/."""
+    output_paths = normalize_all_sources()
+    if not output_paths:
+        typer.echo("No raw source files found.")
+        return
+    typer.echo(f"Normalized {len(output_paths)} day files")
+    for path in output_paths:
+        typer.echo(f"- {path.relative_to(ROOT)}")
+
+
+@app.command("inspect-github-source")
+def inspect_github_source(
+    repo: str = typer.Option(..., "--repo", help="GitHub repository in owner/name format"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of pull requests to inspect"),
+) -> None:
+    """Inspect GitHub pull requests as raw sources."""
+    adapter = GitHubSourceAdapter(repo=repo, limit=limit)
+    try:
+        sources = adapter.discover()
+    except SourceAdapterError as exc:
+        typer.echo(f"GitHub source inspection failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"adapter: {adapter.name}")
+    typer.echo(f"repo: {repo}")
+    typer.echo(f"discovered_sources: {len(sources)}")
+    for source in sources:
+        typer.echo(f"- id: {source.id}")
+        typer.echo(f"  title: {source.title}")
+        typer.echo(f"  origin: {source.origin}")
+
+
+@app.command("inspect-daily-report")
+def inspect_daily_report(
+    file: str = typer.Option(..., "--file", "-f", help="Daily report markdown or text file"),
+) -> None:
+    """Inspect one daily report as a raw source."""
+    try:
+        source = inspect_daily_report_file(file)
+    except SourceAdapterError as exc:
+        typer.echo(f"Daily report inspection failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo("adapter: daily_report")
+    typer.echo(f"id: {source.id}")
+    typer.echo(f"title: {source.title}")
+    typer.echo(f"origin: {source.origin}")
+    typer.echo(f"detected_date: {source.metadata.get('detected_date', source.captured_at)}")
+
+
+@app.command("inspect-daily-reports")
+def inspect_daily_reports(
+    dir: str = typer.Option(str(DAILY_REPORTS_DIR), "--dir", help="Directory that stores daily reports"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of reports to inspect"),
+) -> None:
+    """Inspect daily reports under a directory as raw sources."""
+    reports_dir = resolve_optional_input_path(dir, root_candidates=[ROOT, REPO_ROOT])
+    adapter = DailyReportSourceAdapter(reports_dir=reports_dir, limit=limit)
+    try:
+        sources = adapter.discover()
+    except SourceAdapterError as exc:
+        typer.echo(f"Daily report inspection failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"adapter: {adapter.name}")
+    typer.echo(f"reports_dir: {display_path(reports_dir)}")
+    typer.echo(f"discovered_sources: {len(sources)}")
+    for source in sources:
+        typer.echo(f"- id: {source.id}")
+        typer.echo(f"  title: {source.title}")
+        typer.echo(f"  origin: {source.origin}")
+
+
+@app.command("inspect-slack-source")
+def inspect_slack_source(
+    channel: str = typer.Option(..., "--channel", help="Slack channel ID"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of messages to inspect"),
+    token_env: str = typer.Option("SLACK_BOT_TOKEN", "--token-env", help="Environment variable that holds the Slack bot token"),
+    oldest: str | None = typer.Option(None, "--oldest", help="Oldest message time in ISO 8601"),
+    latest: str | None = typer.Option(None, "--latest", help="Latest message time in ISO 8601"),
+) -> None:
+    """Inspect Slack messages as raw sources."""
+    adapter = SlackSourceAdapter(
+        channel=channel,
+        limit=limit,
+        token_env=token_env,
+        oldest=parse_cli_datetime(oldest),
+        latest=parse_cli_datetime(latest),
+    )
+    try:
+        sources = adapter.discover()
+    except SourceAdapterError as exc:
+        typer.echo(f"Slack source inspection failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"adapter: {adapter.name}")
+    typer.echo(f"channel: {channel}")
+    typer.echo(f"discovered_sources: {len(sources)}")
+    for source in sources:
+        typer.echo(f"- id: {source.id}")
+        typer.echo(f"  title: {source.title}")
+        typer.echo(f"  origin: {source.origin}")
+
+
+@app.command("inspect-teams-source")
+def inspect_teams_source(
+    team_id: str = typer.Option(..., "--team-id", help="Microsoft Teams team ID"),
+    channel_id: str = typer.Option(..., "--channel-id", help="Microsoft Teams channel ID"),
+    limit: int = typer.Option(20, "--limit", min=1, max=50, help="Maximum number of messages to inspect"),
+    token_env: str = typer.Option("MS_GRAPH_TOKEN", "--token-env", help="Environment variable that holds the Microsoft Graph token"),
+    oldest: str | None = typer.Option(None, "--oldest", help="Oldest message time in ISO 8601"),
+    latest: str | None = typer.Option(None, "--latest", help="Latest message time in ISO 8601"),
+) -> None:
+    """Inspect Teams channel messages as raw sources."""
+    adapter = TeamsSourceAdapter(
+        team_id=team_id,
+        channel_id=channel_id,
+        limit=limit,
+        token_env=token_env,
+        oldest=parse_iso_datetime(oldest),
+        latest=parse_iso_datetime(latest),
+    )
+    try:
+        sources = adapter.discover()
+    except SourceAdapterError as exc:
+        typer.echo(f"Teams source inspection failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"adapter: {adapter.name}")
+    typer.echo(f"team_id: {team_id}")
+    typer.echo(f"channel_id: {channel_id}")
+    typer.echo(f"discovered_sources: {len(sources)}")
+    for source in sources:
+        typer.echo(f"- id: {source.id}")
+        typer.echo(f"  title: {source.title}")
+        typer.echo(f"  origin: {source.origin}")
+
+
+@app.command("normalize-github-source")
+def normalize_github_source(
+    repo: str = typer.Option(..., "--repo", help="GitHub repository in owner/name format"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of pull requests to normalize"),
+) -> None:
+    """Normalize GitHub pull requests into canonical event markdown files."""
+    try:
+        output_paths = normalize_github_sources(repo=repo, limit=limit)
+    except SourceAdapterError as exc:
+        typer.echo(f"GitHub source normalization failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not output_paths:
+        typer.echo("No GitHub pull requests found.")
+        return
+    typer.echo(f"Normalized {len(output_paths)} day files from GitHub")
+    for path in output_paths:
+        typer.echo(f"- {path.relative_to(ROOT)}")
+
+
+@app.command("import-daily-report")
+def import_daily_report(
+    file: str = typer.Option(..., "--file", "-f", help="Daily report markdown or text file"),
+) -> None:
+    """Normalize one daily report into canonical event markdown."""
+    try:
+        output_path = normalize_daily_report_file(file)
+    except SourceAdapterError as exc:
+        typer.echo(f"Daily report import failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Imported daily report: {output_path.relative_to(ROOT)}")
+
+
+@app.command("import-daily-reports")
+def import_daily_reports(
+    dir: str = typer.Option(str(DAILY_REPORTS_DIR), "--dir", help="Directory that stores daily reports"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of reports to import"),
+) -> None:
+    """Normalize daily reports under a directory into canonical event markdown."""
+    try:
+        output_paths = normalize_daily_reports_dir(dir, limit=limit)
+    except SourceAdapterError as exc:
+        typer.echo(f"Daily report import failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not output_paths:
+        typer.echo("No daily reports found.")
+        return
+    typer.echo(f"Imported {len(output_paths)} day files from daily reports")
+    for path in output_paths:
+        typer.echo(f"- {path.relative_to(ROOT)}")
+
+
+@app.command("normalize-slack-source")
+def normalize_slack_source(
+    channel: str = typer.Option(..., "--channel", help="Slack channel ID"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of messages to normalize"),
+    token_env: str = typer.Option("SLACK_BOT_TOKEN", "--token-env", help="Environment variable that holds the Slack bot token"),
+    oldest: str | None = typer.Option(None, "--oldest", help="Oldest message time in ISO 8601"),
+    latest: str | None = typer.Option(None, "--latest", help="Latest message time in ISO 8601"),
+) -> None:
+    """Normalize Slack messages into canonical event markdown files."""
+    try:
+        output_paths = normalize_slack_sources(
+            channel=channel,
+            limit=limit,
+            token_env=token_env,
+            oldest=parse_cli_datetime(oldest),
+            latest=parse_cli_datetime(latest),
+        )
+    except SourceAdapterError as exc:
+        typer.echo(f"Slack source normalization failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not output_paths:
+        typer.echo("No Slack messages found.")
+        return
+    typer.echo(f"Normalized {len(output_paths)} day files from Slack")
+    for path in output_paths:
+        typer.echo(f"- {path.relative_to(ROOT)}")
+
+
+@app.command("normalize-teams-source")
+def normalize_teams_source(
+    team_id: str = typer.Option(..., "--team-id", help="Microsoft Teams team ID"),
+    channel_id: str = typer.Option(..., "--channel-id", help="Microsoft Teams channel ID"),
+    limit: int = typer.Option(20, "--limit", min=1, max=50, help="Maximum number of messages to normalize"),
+    token_env: str = typer.Option("MS_GRAPH_TOKEN", "--token-env", help="Environment variable that holds the Microsoft Graph token"),
+    oldest: str | None = typer.Option(None, "--oldest", help="Oldest message time in ISO 8601"),
+    latest: str | None = typer.Option(None, "--latest", help="Latest message time in ISO 8601"),
+) -> None:
+    """Normalize Teams channel messages into canonical event markdown files."""
+    try:
+        output_paths = normalize_teams_sources(
+            team_id=team_id,
+            channel_id=channel_id,
+            limit=limit,
+            token_env=token_env,
+            oldest=parse_iso_datetime(oldest),
+            latest=parse_iso_datetime(latest),
+        )
+    except SourceAdapterError as exc:
+        typer.echo(f"Teams source normalization failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not output_paths:
+        typer.echo("No Teams messages found.")
+        return
+    typer.echo(f"Normalized {len(output_paths)} day files from Teams")
+    for path in output_paths:
+        typer.echo(f"- {path.relative_to(ROOT)}")
+
+
+@app.command("list-source-adapters")
+def list_source_adapters() -> None:
+    """List registered source adapters."""
+    registry = build_source_adapter_registry()
+    for adapter_name in registry.list():
+        typer.echo(adapter_name)
+
+
+@app.command("inspect-source-adapter")
+def inspect_source_adapter(
+    adapter: str = typer.Option(..., "--adapter", help="Source adapter name"),
+) -> None:
+    """Inspect a registered source adapter and its discovered sources."""
+    source_adapter = build_source_adapter_registry().get(adapter)
+    try:
+        sources = source_adapter.discover()
+    except SourceAdapterError as exc:
+        typer.echo(f"Source adapter inspection failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"adapter: {source_adapter.name}")
+    typer.echo(f"discovered_sources: {len(sources)}")
+    if not sources:
+        return
+    for source in sources:
+        typer.echo(f"- id: {source.id}")
+        typer.echo(f"  title: {source.title}")
+        typer.echo(f"  origin: {source.origin}")
 
 
 @app.command("generate-pdf")

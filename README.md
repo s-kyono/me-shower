@@ -7,6 +7,17 @@
 
 原本Excelは参考テンプレートとして扱い、成果物は `app/generated/職務経歴書.pdf` とします。
 
+## Concept Docs
+
+me-shower は、仕事の痕跡・証跡・Human Review から Career Knowledge を育てる Personal Career Operating System です。
+
+詳しくは以下を参照してください。
+
+- `docs/ja/00_vision.md`
+- `docs/ja/01_concepts.md`
+- `docs/ja/02_architecture.md`
+- `docs/ja/03_operating_model.md`
+
 ## ディレクトリ構成
 
 ```text
@@ -56,6 +67,43 @@ uv run me-shower analyze
 # 手動ログを追加
 uv run me-shower add-log --message "職務経歴データを更新"
 
+# raw source を 1 件正規化
+uv run me-shower normalize-source --file app/data/raw_sources/sample.txt
+
+# raw source を一括正規化
+uv run me-shower normalize-sources
+
+# Daily Report を 1 件 inspect
+uv run me-shower inspect-daily-report --file app/data/daily_reports/2026-07-11.md
+
+# Daily Report を 1 件 import
+uv run me-shower import-daily-report --file app/data/daily_reports/2026-07-11.md
+
+# Daily Report を一覧 inspect
+uv run me-shower inspect-daily-reports --dir app/data/daily_reports --limit 20
+
+# Daily Report を一括 import
+uv run me-shower import-daily-reports --dir app/data/daily_reports --limit 20
+
+# Source Timeline を生成
+uv run me-shower build-source-timeline
+
+# Source Timeline を確認
+uv run me-shower inspect-source-timeline --limit 20
+uv run me-shower inspect-source-timeline --from 2026-07-01 --to 2026-07-31 --min-confidence medium
+
+# Slack source を inspect
+uv run me-shower inspect-slack-source --channel C0123456789 --limit 20 --token-env SLACK_BOT_TOKEN
+
+# Slack source を正規化
+uv run me-shower normalize-slack-source --channel C0123456789 --limit 20 --token-env SLACK_BOT_TOKEN
+
+# Teams source を inspect
+uv run me-shower inspect-teams-source --team-id TEAM_ID --channel-id CHANNEL_ID --limit 20 --token-env MS_GRAPH_TOKEN
+
+# Teams source を正規化
+uv run me-shower normalize-teams-source --team-id TEAM_ID --channel-id CHANNEL_ID --limit 20 --token-env MS_GRAPH_TOKEN
+
 # Skill改善提案を生成
 uv run me-shower loop-skills
 
@@ -91,6 +139,105 @@ uv run me-shower add-log --message "職務経歴データを更新"
 ```
 
 ログは `app/data/events/` にYAMLとして保存されます。
+
+### `uv run me-shower normalize-source`
+
+```bash
+uv run me-shower normalize-source --file app/data/raw_sources/sample.txt
+```
+
+`app/data/raw_sources/*.txt` の 1 ファイルを読み、Evidence Guard で秘匿情報を redaction したうえで、抽象化済みの Canonical Event / Evidence を `app/data/source_sync/YYYY-MM-DD.md` に保存します。raw source の本文は `source_sync` に保存しません。感想だけの tool メモや生活ノイズは除外し、`Resolver分離した` のような雑な記述は downstream で扱いやすい Canonical action に寄せます。分類キーワードやノイズ判定は `.codex/source-intelligence/rules/` 配下の用途別 YAML で管理します。
+
+### `uv run me-shower normalize-sources`
+
+```bash
+uv run me-shower normalize-sources
+```
+
+`app/data/raw_sources/*.txt` をまとめて正規化し、日付ごとの `app/data/source_sync/YYYY-MM-DD.md` を生成します。Learning Loop はこの `source_sync` を入力として利用します。resume 向けの選別や言い換えはここでは行わず、`generate-md` / `issue` の Resume Agent Hook で扱う前提です。
+
+Source Confidence は、Canonical Event の evidence quality を `high` / `medium` / `low` で表します。これは成果の価値判断ではなく、source / metadata / extraction quality / noise の強さを表す運用指標です。
+
+### `uv run me-shower build-source-timeline`
+
+```bash
+uv run me-shower build-source-timeline
+```
+
+Source Timeline は `source_sync` から生成される derived view です。Canonical Event を日付順に見渡すための index であり、source of truth ではありません。
+
+### `uv run me-shower inspect-source-timeline`
+
+```bash
+uv run me-shower inspect-source-timeline --limit 20
+uv run me-shower inspect-source-timeline --from 2026-07-01 --to 2026-07-31 --min-confidence medium
+```
+
+Timeline item を CLI で確認します。`--from` / `--to` / `--source-type` / `--min-confidence` / `--limit` で絞り込みできます。raw source text は表示しません。
+
+### `uv run me-shower inspect-daily-report`
+
+```bash
+uv run me-shower inspect-daily-report --file app/data/daily_reports/2026-07-11.md
+```
+
+`app/data/daily_reports/` 配下の `.md` / `.txt` を 1 件 `RawSource` として確認します。Daily Report は固定テンプレート不要で、frontmatter・ファイル名・見出し・本文冒頭から日付を推定します。inspect 出力には raw report text を出しません。
+
+### `uv run me-shower import-daily-report`
+
+```bash
+uv run me-shower import-daily-report --file app/data/daily_reports/2026-07-11.md
+```
+
+1 件の freestyle report を `daily_report` source として取り込み、Evidence Guard と Noisy Input Normalization を通して `app/data/source_sync/YYYY-MM-DD.md` に追記します。raw report text は `source_sync` に保存せず、既存の同日イベントを消さずに `source_id` ベースで重複を防ぎます。
+
+### `uv run me-shower inspect-daily-reports`
+
+```bash
+uv run me-shower inspect-daily-reports --dir app/data/daily_reports --limit 20
+```
+
+`app/data/daily_reports/` を再帰走査し、Markdown / text の freestyle report 一覧を `RawSource` として確認します。ディレクトリ名やファイル名は固定しません。
+
+### `uv run me-shower import-daily-reports`
+
+```bash
+uv run me-shower import-daily-reports --dir app/data/daily_reports --limit 20
+```
+
+`app/data/daily_reports/` 配下の `.md` / `.txt` をまとめて import します。Daily Report は Resume に直接反映せず、既存の Source Normalizer / Evidence Guard / Noisy Input Normalization を通した Canonical Event / Evidence としてのみ保存します。
+
+### `uv run me-shower inspect-slack-source`
+
+```bash
+uv run me-shower inspect-slack-source --channel C0123456789 --limit 20 --token-env SLACK_BOT_TOKEN
+```
+
+Slack channel history を `RawSource` として確認します。token は CLI 引数ではなく環境変数名で指定し、inspect 出力には raw message text を出しません。
+
+### `uv run me-shower normalize-slack-source`
+
+```bash
+uv run me-shower normalize-slack-source --channel C0123456789 --limit 20 --token-env SLACK_BOT_TOKEN
+```
+
+Slack message を `RawSource` として取得し、Evidence Guard と Noisy Input Normalization を通して `app/data/source_sync/YYYY-MM-DD.md` に追記します。raw Slack message 本文や token は保存せず、既存の同日 `source_sync` を消さずに `source_id` ベースで重複を防ぎます。
+
+### `uv run me-shower inspect-teams-source`
+
+```bash
+uv run me-shower inspect-teams-source --team-id TEAM_ID --channel-id CHANNEL_ID --limit 20 --token-env MS_GRAPH_TOKEN
+```
+
+Microsoft Teams channel messages を `RawSource` として確認します。token は CLI 引数ではなく環境変数名で指定し、inspect 出力には raw message text や raw HTML を出しません。
+
+### `uv run me-shower normalize-teams-source`
+
+```bash
+uv run me-shower normalize-teams-source --team-id TEAM_ID --channel-id CHANNEL_ID --limit 20 --token-env MS_GRAPH_TOKEN
+```
+
+Teams channel messages を `RawSource` として取得し、HTML body を text 化したうえで Evidence Guard と Noisy Input Normalization を通して `app/data/source_sync/YYYY-MM-DD.md` に追記します。raw Teams message 本文、raw HTML、token は保存せず、既存の同日 `source_sync` を消さずに `source_id` ベースで重複を防ぎます。
 
 ### `uv run me-shower loop-skills`
 

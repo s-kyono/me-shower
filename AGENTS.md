@@ -15,6 +15,9 @@
 ## 作業ルール
 
 - `職務経歴書原本.xlsx` は現行原本として扱い、勝手に上書きしない。
+- `docs/` 直下の Concept docs は canonical docs として扱う。
+- `docs/ja/` は人間向けの Japanese companion docs として扱い、AIエージェントは明示指示がない限り `docs/ja/` を source of truth としない。
+- Concept や設計判断が必要な場合、AIエージェントはまず `docs/` 直下の canonical docs を優先して参照し、必要に応じて `docs/ja/` を補助的に参照する。
 - 原本Excelから読み取った内容は、直接提出物へ流さず、まず `.codex/steering_sheets/career_profile.md` と `.codex/steering_sheets/work_history.md` に整理する。
 - 原本ExcelとMarkdownの差分、確認待ち、表現リスクは `.codex/steering_sheets/review_notes.md` に残す。
 - 職務要約、強み、所属履歴、スキルは `.codex/steering_sheets/career_profile.md` を更新する。

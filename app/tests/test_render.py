@@ -4,6 +4,154 @@ import json
 
 import main
 from main import load_resume_data, render_markdown
+import pytest
+from typer.testing import CliRunner
+
+
+runner = CliRunner()
+
+
+def build_command_runner(fixtures: dict[tuple[str, ...], main.CommandResult]):
+    def runner(command: list[str]) -> main.CommandResult:
+        key = tuple(command)
+        if key not in fixtures:
+            raise AssertionError(f"Unexpected command: {command}")
+        return fixtures[key]
+
+    return runner
+
+
+def build_slack_api_caller(fixtures: dict[tuple[str, tuple[tuple[str, object], ...]], dict[str, object]]):
+    def caller(method: str, params: dict[str, object]) -> dict[str, object]:
+        normalized = tuple(sorted((key, value) for key, value in params.items() if value is not None))
+        key = (method, normalized)
+        if key not in fixtures:
+            raise AssertionError(f"Unexpected Slack API call: {method} {params}")
+        return fixtures[key]
+
+    return caller
+
+
+def build_graph_api_caller(fixtures: dict[tuple[str, tuple[tuple[str, object], ...]], dict[str, object]]):
+    def caller(path: str, params: dict[str, object]) -> dict[str, object]:
+        normalized = tuple(sorted((key, value) for key, value in params.items() if value is not None))
+        key = (path, normalized)
+        if key not in fixtures:
+            raise AssertionError(f"Unexpected Microsoft Graph API call: {path} {params}")
+        return fixtures[key]
+
+    return caller
+
+
+def write_source_sync_fixture(source_sync_dir: Path) -> None:
+    source_sync_dir.mkdir(parents=True, exist_ok=True)
+    (source_sync_dir / "2026-07-10.md").write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-07-10",
+                "",
+                "## Event 1",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-07-10",
+                "  source_id: daily_report:2026-07-10.md",
+                "  source_type: daily_report",
+                "  category: implementation",
+                "  summary: GraphQL Resolver分離を実施",
+                "  actions:",
+                "  - GraphQL Resolver分離を実施",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - Resolver責務を整理",
+                "  tags:",
+                "  - GraphQL",
+                "  - Resolver",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - low_signal",
+                "  confidence: medium",
+                "  confidence_reasons:",
+                "  - source_type:daily_report",
+                "  - actions:1",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: daily_report:2026-07-10.md",
+                "",
+                "## Event 2",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-07-10",
+                "  source_type: github",
+                "  category: review",
+                "  summary: PRレビューで設計指摘を受領",
+                "  actions:",
+                "  - PRレビューで設計指摘を受領",
+                "  decisions:",
+                "  - リファクタ方針を決定",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - PR",
+                "  tools:",
+                "  - gh",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: high",
+                "  confidence_reasons:",
+                "  - source_type:github",
+                "  - actions:1",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: github:s-kyono/me-shower#3",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (source_sync_dir / "2026-07-11.md").write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-07-11",
+                "",
+                "## Event 1",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-07-11",
+                "  source_id: slack:C0123456789:1781736600.000100",
+                "  source_type: slack",
+                "  category: implementation",
+                "  summary: Slack Connector関連の実装・調査を実施",
+                "  actions:",
+                "  - Slack Connector関連の実装・調査を実施",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - Slack",
+                "  - Connector",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: low",
+                "  confidence_reasons:",
+                "  - source_type:slack",
+                "  - actions:1",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: slack:C0123456789",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_load_resume_data_has_projects() -> None:
@@ -32,6 +180,27 @@ def test_generate_markdown_file_writes_output(monkeypatch, tmp_path: Path) -> No
 
     assert output_path.exists()
     assert "# 職務経歴書" in output_path.read_text(encoding="utf-8")
+
+
+def test_source_rule_loaders_read_split_rule_files() -> None:
+    categories = main.load_category_rules()
+    technologies = main.load_technology_rules()
+    ai_tools = main.load_ai_tool_rules()
+    noise = main.load_noise_rules()
+    confidence = main.load_confidence_rules()
+    evidence = main.load_evidence_rules()
+    sensitive_labels = main.load_sensitive_label_rules()
+
+    assert "categories" in categories
+    assert "category_keywords" in categories
+    assert "tag_keywords" in technologies
+    assert "tool_keywords" in ai_tools
+    assert "noise_keywords" in noise
+    assert "thresholds" in confidence
+    assert "source_type_weights" in confidence
+    assert confidence["levels"]["high"]["min_score"] == 80
+    assert evidence["schema"] == "canonical_event_v0_3"
+    assert "labels" in sensitive_labels
 
 
 def test_generate_pdf_file_writes_output(monkeypatch, tmp_path: Path) -> None:
@@ -292,6 +461,2009 @@ def test_add_log_redacts_realistic_sensitive_inputs_before_saving(monkeypatch, t
     assert "[REDACTED_TICKET_ID]" in event_text
     assert "[REDACTED_BRANCH_NAME]" in event_text
     assert "[REDACTED_ENV_OR_DB_NAME]" in event_text
+
+
+def test_normalize_source_extracts_canonical_event_and_removes_noise(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    raw_file = data_dir / "raw_sources" / "2026-07-09_sample.txt"
+    raw_file.parent.mkdir(parents=True, exist_ok=True)
+    raw_file.write_text(
+        "\n".join(
+            [
+                "眠いしコーヒー飲んだ",
+                "GraphQL Resolver の N+1 を見直して Cursor と Claude で修正方針を整理",
+                "PR レビューで設計の指摘を反映してリファクタ方針を決定",
+                "株式会社サンプル 090-1234-5678 https://github.com/example/private-repo",
+                "昼飯の話だけした",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_path = main.normalize_source_file(raw_file)
+    content = output_path.read_text(encoding="utf-8")
+    report_text = next(reviews_dir.glob("*.md")).read_text(encoding="utf-8")
+
+    assert output_path.name == "2026-07-09.md"
+    assert "schema: canonical_event_v0_3" in content
+    assert "actions:" in content
+    assert "tags:" in content
+    assert "tools:" in content
+    assert "evidence:" in content
+    assert "GraphQL" in content
+    assert "Resolver" in content
+    assert "Cursor" in content
+    assert "Claude" in content
+    assert "レビュー" in content
+    assert "眠い" not in content
+    assert "コーヒー" not in content
+    assert "昼飯" not in content
+    assert "株式会社サンプル" not in content
+    assert "090-1234-5678" not in content
+    assert "https://github.com/example/private-repo" not in content
+    assert "noise_removed:" in content
+    assert "fatigue" in content
+    assert "drink" in content
+    assert "meal" in content
+    assert "confidence: medium" in content
+    assert "confidence_reasons:" in content
+    assert "[REDACTED_ORG_NAME]" not in content
+    assert "[REDACTED_PHONE_NUMBER]" not in content
+    assert "[REDACTED_GITHUB_URL]" not in content
+    assert "source_reference" in content
+    assert "2026-07-09_sample.txt" in content
+    assert "[REDACTED_ORG_NAME]" in report_text
+    assert "[REDACTED_PHONE_NUMBER]" in report_text
+    assert "[REDACTED_GITHUB_URL]" in report_text
+
+
+def test_normalize_sources_processes_multiple_files(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    raw_dir = data_dir / "raw_sources"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "2026-07-08_daily.txt").write_text(
+        "GraphQL の schema 修正と Resolver 実装を進めた",
+        encoding="utf-8",
+    )
+    (raw_dir / "2026-07-09_slack.txt").write_text(
+        "Claude でレビュー観点を整理して PR レビューを実施",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_paths = main.normalize_all_sources()
+
+    assert len(output_paths) == 2
+    assert source_sync_dir.joinpath("2026-07-08.md").exists()
+    assert source_sync_dir.joinpath("2026-07-09.md").exists()
+    assert "GraphQL" in source_sync_dir.joinpath("2026-07-08.md").read_text(encoding="utf-8")
+    assert "Claude" in source_sync_dir.joinpath("2026-07-09.md").read_text(encoding="utf-8")
+
+
+def test_file_source_adapter_discovers_raw_sources(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    raw_dir = data_dir / "raw_sources"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    sample = raw_dir / "2026-07-09_sample.txt"
+    sample.write_text("GraphQL Resolver を見直した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+
+    adapter = main.FileSourceAdapter(raw_dir)
+    sources = adapter.discover()
+
+    assert len(sources) == 1
+    source = sources[0]
+    assert source.source_type == "file"
+    assert source.origin == str(sample.resolve())
+    assert source.content == "GraphQL Resolver を見直した"
+    assert source.title == "2026-07-09_sample.txt"
+    assert source.id == "2026-07-09_sample.txt"
+
+
+def test_file_source_adapter_fetches_source_by_id(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    raw_dir = data_dir / "raw_sources"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    sample = raw_dir / "2026-07-09_sample.txt"
+    sample.write_text("PR レビューを実施", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+
+    adapter = main.FileSourceAdapter(raw_dir)
+    source = adapter.fetch("2026-07-09_sample.txt")
+
+    assert source.content == "PR レビューを実施"
+    with pytest.raises(main.SourceNotFoundError):
+        adapter.fetch("missing.txt")
+
+
+def test_daily_report_source_adapter_discovers_reports(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    reports_dir = data_dir / "daily_reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    sample = reports_dir / "2026-07-11.md"
+    sample.write_text("GraphQL Resolver を分離した", encoding="utf-8")
+    nested = reports_dir / "notes" / "20260710-worklog.txt"
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_text("Slack Connector を追加した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+
+    adapter = main.DailyReportSourceAdapter(reports_dir)
+    sources = adapter.discover()
+
+    assert len(sources) == 2
+    assert all(source.source_type == "daily_report" for source in sources)
+    assert all(source.metadata["kind"] in {"freestyle_report", "worklog"} for source in sources)
+    assert sources[0].id == "daily_report:2026-07-11.md"
+    assert sources[0].content == "GraphQL Resolver を分離した"
+    assert sources[0].metadata["relative_path"] == "2026-07-11.md"
+    assert sources[0].metadata["format"] == "markdown"
+    assert sources[1].id == "daily_report:notes/20260710-worklog.txt"
+    assert sources[1].metadata["format"] == "text"
+
+
+def test_daily_report_source_adapter_fetches_source_by_id(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    reports_dir = data_dir / "daily_reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    sample = reports_dir / "2026-07-11.md"
+    sample.write_text("PR レビューを実施", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+
+    adapter = main.DailyReportSourceAdapter(reports_dir)
+    source = adapter.fetch("daily_report:2026-07-11.md")
+
+    assert source.content == "PR レビューを実施"
+    with pytest.raises(main.SourceNotFoundError):
+        adapter.fetch("daily_report:missing.md")
+
+
+def test_daily_report_detects_date_from_filename() -> None:
+    assert main.detect_daily_report_date(
+        Path("2026-07-11.md"),
+        "",
+        "",
+        {},
+    ) == "2026-07-11"
+    assert main.detect_daily_report_date(
+        Path("20260711-worklog.txt"),
+        "",
+        "",
+        {},
+    ) == "2026-07-11"
+    assert main.detect_daily_report_date(
+        Path("2026_07_11_note.md"),
+        "",
+        "",
+        {},
+    ) == "2026-07-11"
+
+
+def test_daily_report_detects_date_from_frontmatter() -> None:
+    assert main.detect_daily_report_date(
+        Path("free-note.md"),
+        "---\ndate: 2026-07-11\n---\nbody",
+        "body",
+        {"date": "2026-07-11"},
+    ) == "2026-07-11"
+
+
+def test_daily_report_single_file_and_bulk_import_use_same_source_id(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    reports_dir = data_dir / "daily_reports"
+    report = reports_dir / "notes" / "20260710-worklog.txt"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("Slack Connector を追加した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+
+    single_source = main.inspect_daily_report_file(report)
+    bulk_source = main.DailyReportSourceAdapter(reports_dir).discover()[0]
+
+    assert single_source.id == "daily_report:notes/20260710-worklog.txt"
+    assert bulk_source.id == "daily_report:notes/20260710-worklog.txt"
+    assert single_source.id == bulk_source.id
+
+
+def test_daily_report_file_outside_default_dir_uses_parent_as_root(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    reports_dir = data_dir / "daily_reports"
+    external_dir = tmp_path / "external"
+    report = external_dir / "external-note.md"
+    external_dir.mkdir(parents=True, exist_ok=True)
+    report.write_text("GraphQL Resolver を分離した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+
+    source = main.inspect_daily_report_file(report)
+
+    assert source.id == "daily_report:external-note.md"
+
+
+def test_source_adapter_registry_lists_file_adapter(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    raw_dir = data_dir / "raw_sources"
+    reports_dir = data_dir / "daily_reports"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "sample.txt").write_text("sample", encoding="utf-8")
+    (reports_dir / "2026-07-11.md").write_text("sample", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+
+    registry = main.build_source_adapter_registry()
+
+    assert "file" in registry.list()
+    assert "daily_report" in registry.list()
+    assert "github" in registry.list()
+    assert "slack" in registry.list()
+    assert "teams" in registry.list()
+    result = runner.invoke(main.app, ["list-source-adapters"])
+    assert result.exit_code == 0
+    assert result.stdout.strip().splitlines() == ["daily_report", "file", "github", "slack", "teams"]
+
+
+def test_inspect_source_adapter_lists_discovered_sources(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    raw_dir = data_dir / "raw_sources"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    sample = raw_dir / "2026-07-09_sample.txt"
+    sample.write_text("Resolver 分離を実施", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+
+    result = runner.invoke(main.app, ["inspect-source-adapter", "--adapter", "file"])
+
+    assert result.exit_code == 0
+    assert "adapter: file" in result.stdout
+    assert "discovered_sources: 1" in result.stdout
+    assert "id: 2026-07-09_sample.txt" in result.stdout
+    assert f"origin: {sample.resolve()}" in result.stdout
+    assert "title: 2026-07-09_sample.txt" in result.stdout
+
+
+def test_inspect_daily_report_cli(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    sample = reports_dir / "2026-07-11.md"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    sample.write_text("# 2026-07-11\n\nGraphQL Resolver を分離した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+
+    result = runner.invoke(main.app, ["inspect-daily-report", "--file", str(sample)])
+
+    assert result.exit_code == 0
+    assert "adapter: daily_report" in result.stdout
+    assert "id: daily_report:2026-07-11.md" in result.stdout
+    assert "title: Daily Report 2026-07-11" in result.stdout
+    assert "detected_date: 2026-07-11" in result.stdout
+    assert "GraphQL Resolver" not in result.stdout
+
+
+def test_inspect_daily_reports_cli(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "2026-07-11.md").write_text("GraphQL Resolver を分離した", encoding="utf-8")
+    (reports_dir / "free-note.txt").write_text("Slack Connector を追加した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+
+    result = runner.invoke(main.app, ["inspect-daily-reports", "--dir", str(reports_dir), "--limit", "20"])
+
+    assert result.exit_code == 0
+    assert "adapter: daily_report" in result.stdout
+    assert "discovered_sources: 2" in result.stdout
+    assert "daily_report:2026-07-11.md" in result.stdout
+    assert "GraphQL Resolver" not in result.stdout
+
+
+def test_normalize_sources_still_works_with_file_adapter(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    raw_dir = data_dir / "raw_sources"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "2026-07-09_daily.txt").write_text(
+        "\n".join(
+            [
+                "今日は眠い",
+                "GraphQL Resolver の分離を実施",
+                "Claude でレビュー観点を整理",
+                "昼飯ラーメン",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_paths = main.normalize_all_sources()
+
+    assert len(output_paths) == 1
+    output_path = output_paths[0]
+    assert output_path == source_sync_dir / "2026-07-09.md"
+    content = output_path.read_text(encoding="utf-8")
+    assert "GraphQL Resolver分離を実施" in content
+    assert "noise_removed:" in content
+    assert "fatigue" in content
+    assert "meal" in content
+    assert "low_signal" in content
+
+
+def test_normalize_source_filters_low_signal_noisy_input(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    raw_file = data_dir / "raw_sources" / "noisy_sample.txt"
+    raw_file.parent.mkdir(parents=True, exist_ok=True)
+    raw_file.write_text(
+        "\n".join(
+            [
+                "今日は眠い",
+                "コーヒー飲んだ",
+                "レビュー受けた",
+                "GraphQLやった",
+                "Cursor便利",
+                "Resolver分離した",
+                "雨だった",
+                "Claudeに聞いた",
+                "疲れた",
+                "PRで設計指摘もらった",
+                "リファクタ方針を決めた",
+                "昼飯ラーメン",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_path = main.normalize_source_file(raw_file)
+    content = output_path.read_text(encoding="utf-8")
+
+    assert "レビュー対応を実施" in content
+    assert "GraphQL関連の実装・調査を実施" in content
+    assert "Resolver分離を実施" in content
+    assert "PRレビューで設計指摘を受領" in content
+    assert "リファクタ方針を決定" in content
+    assert "Cursor便利" not in content
+    assert "Claudeに聞いた" not in content
+    assert "今日は眠い" not in content
+    assert "コーヒー" not in content
+    assert "雨だった" not in content
+    assert "疲れた" not in content
+    assert "昼飯" not in content
+    assert "fatigue" in content
+    assert "drink" in content
+    assert "weather" in content
+    assert "meal" in content
+    assert "low_signal" in content
+
+
+def test_github_source_adapter_discovers_pull_requests() -> None:
+    fixtures = {
+        (
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            "s-kyono/me-shower",
+            "--state",
+            "all",
+            "--limit",
+            "20",
+            "--json",
+            "number,title,body,state,author,createdAt,updatedAt,url,labels",
+        ): main.CommandResult(
+            stdout=json.dumps(
+                [
+                    {
+                        "number": 3,
+                        "title": "Add source normalizer and split source intelligence rules",
+                        "body": "GraphQL Resolver を分離し、正規化ルールを整理した",
+                        "state": "OPEN",
+                        "author": {"login": "s-kyono"},
+                        "createdAt": "2026-07-10T08:00:00Z",
+                        "updatedAt": "2026-07-11T09:30:00Z",
+                        "url": "https://github.com/s-kyono/me-shower/pull/3",
+                        "labels": [{"name": "source-intelligence"}, {"name": "normalizer"}],
+                    }
+                ]
+            ),
+            stderr="",
+            returncode=0,
+        )
+    }
+
+    adapter = main.GitHubSourceAdapter(
+        repo="s-kyono/me-shower",
+        command_runner=build_command_runner(fixtures),
+    )
+    sources = adapter.discover()
+
+    assert len(sources) == 1
+    source = sources[0]
+    assert source.source_type == "github"
+    assert source.metadata["kind"] == "pull_request"
+    assert source.id == "github:s-kyono/me-shower:pr:3"
+    assert source.origin == "github:s-kyono/me-shower#3"
+    assert "PR #3 Add source normalizer and split source intelligence rules" in source.content
+    assert "GraphQL Resolver を分離し、正規化ルールを整理した" in source.content
+
+
+def test_github_source_adapter_fetches_source_by_id() -> None:
+    fixtures = {
+        (
+            "gh",
+            "pr",
+            "view",
+            "3",
+            "--repo",
+            "s-kyono/me-shower",
+            "--json",
+            "number,title,body,state,author,createdAt,updatedAt,url,labels,files",
+        ): main.CommandResult(
+            stdout=json.dumps(
+                {
+                    "number": 3,
+                    "title": "Add source normalizer and split source intelligence rules",
+                    "body": "Resolver 分離とルール整理を実施",
+                    "state": "MERGED",
+                    "author": {"login": "s-kyono"},
+                    "createdAt": "2026-07-10T08:00:00Z",
+                    "updatedAt": "2026-07-11T09:30:00Z",
+                    "url": "https://github.com/s-kyono/me-shower/pull/3",
+                    "labels": [{"name": "source-intelligence"}],
+                    "files": [
+                        {"path": "app/src/main.py", "additions": 120, "deletions": 12},
+                        {"path": "app/tests/test_render.py", "additions": 40, "deletions": 0},
+                    ],
+                }
+            ),
+            stderr="",
+            returncode=0,
+        ),
+        (
+            "gh",
+            "pr",
+            "view",
+            "999",
+            "--repo",
+            "s-kyono/me-shower",
+            "--json",
+            "number,title,body,state,author,createdAt,updatedAt,url,labels,files",
+        ): main.CommandResult(
+            stdout="",
+            stderr="pull request not found",
+            returncode=1,
+        ),
+    }
+
+    adapter = main.GitHubSourceAdapter(
+        repo="s-kyono/me-shower",
+        command_runner=build_command_runner(fixtures),
+    )
+    source = adapter.fetch("github:s-kyono/me-shower:pr:3")
+
+    assert source.metadata["number"] == 3
+    assert source.metadata["changed_files"] == [
+        "app/src/main.py (+120 -12)",
+        "app/tests/test_render.py (+40 -0)",
+    ]
+    with pytest.raises(main.SourceNotFoundError):
+        adapter.fetch("github:s-kyono/me-shower:pr:999")
+
+
+def test_slack_source_adapter_discovers_messages(monkeypatch) -> None:
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 20)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "SLACK_SENTINEL GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                    "thread_ts": "1781736600.000100",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {
+            "ok": True,
+            "permalink": "https://example.slack.com/archives/C0123456789/p1781736600000100",
+        },
+    }
+
+    adapter = main.SlackSourceAdapter(
+        channel="C0123456789",
+        api_caller=build_slack_api_caller(fixtures),
+    )
+    sources = adapter.discover()
+
+    assert len(sources) == 1
+    source = sources[0]
+    assert source.source_type == "slack"
+    assert source.metadata["kind"] == "message"
+    assert source.id == "slack:C0123456789:1781736600.000100"
+    assert source.origin == "slack:C0123456789:1781736600.000100"
+    assert "SLACK_SENTINEL GraphQL Resolver を分離した" in source.content
+    assert source.metadata["permalink"] == "https://example.slack.com/archives/C0123456789/p1781736600000100"
+
+
+def test_slack_source_adapter_fetches_source_by_id(monkeypatch) -> None:
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 20)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {
+            "ok": True,
+            "permalink": "https://example.slack.com/archives/C0123456789/p1781736600000100",
+        },
+    }
+
+    adapter = main.SlackSourceAdapter(
+        channel="C0123456789",
+        api_caller=build_slack_api_caller(fixtures),
+    )
+    source = adapter.fetch("slack:C0123456789:1781736600.000100")
+
+    assert source.metadata["ts"] == "1781736600.000100"
+    with pytest.raises(main.SourceNotFoundError):
+        adapter.fetch("slack:C0123456789:missing")
+
+
+def test_teams_html_body_to_text() -> None:
+    body = "<div>GraphQL Resolver を分離しました <at id=\"0\">山田太郎</at> &amp; schema を更新</div>"
+
+    text = main.teams_html_body_to_text(body)
+
+    assert text == "GraphQL Resolver を分離しました 山田太郎 & schema を更新"
+
+
+def test_teams_source_adapter_discovers_messages(monkeypatch) -> None:
+    monkeypatch.setenv("MS_GRAPH_TOKEN", "eyJ.fake.token")
+    fixtures = {
+        (
+            "/v1.0/teams/team-123/channels/channel-456/messages",
+            (("$top", 20),),
+        ): {
+            "value": [
+                {
+                    "id": "1700000000001",
+                    "createdDateTime": "2026-07-11T01:30:00Z",
+                    "lastModifiedDateTime": "2026-07-11T01:45:00Z",
+                    "subject": "",
+                    "summary": "",
+                    "importance": "normal",
+                    "messageType": "message",
+                    "replyToId": None,
+                    "webUrl": "https://teams.microsoft.com/l/message/abc",
+                    "body": {
+                        "contentType": "html",
+                        "content": "<div>GraphQL Resolver を分離しました <at id=\"0\">山田太郎</at> &amp; schema を更新</div>",
+                    },
+                    "from": {
+                        "user": {
+                            "id": "user-123",
+                            "displayName": "山田太郎",
+                        }
+                    },
+                }
+            ]
+        }
+    }
+
+    adapter = main.TeamsSourceAdapter(
+        team_id="team-123",
+        channel_id="channel-456",
+        api_caller=build_graph_api_caller(fixtures),
+    )
+    sources = adapter.discover()
+
+    assert len(sources) == 1
+    source = sources[0]
+    assert source.source_type == "teams"
+    assert source.metadata["kind"] == "channel_message"
+    assert source.id == "teams:team-123:channel-456:1700000000001"
+    assert source.origin == "teams:team-123:channel-456:1700000000001"
+    assert "GraphQL Resolver を分離しました 山田太郎 & schema を更新" in source.content
+    assert "<at id=" not in source.content
+
+
+def test_teams_source_adapter_fetches_source_by_id(monkeypatch) -> None:
+    monkeypatch.setenv("MS_GRAPH_TOKEN", "eyJ.fake.token")
+    fixtures = {
+        (
+            "/v1.0/teams/team-123/channels/channel-456/messages",
+            (("$top", 20),),
+        ): {
+            "value": [
+                {
+                    "id": "1700000000001",
+                    "createdDateTime": "2026-07-11T01:30:00Z",
+                    "lastModifiedDateTime": "2026-07-11T01:45:00Z",
+                    "importance": "normal",
+                    "messageType": "message",
+                    "body": {
+                        "contentType": "html",
+                        "content": "<div>GraphQL Resolver を分離しました</div>",
+                    },
+                    "from": {"user": {"id": "user-123", "displayName": "山田太郎"}},
+                }
+            ]
+        }
+    }
+
+    adapter = main.TeamsSourceAdapter(
+        team_id="team-123",
+        channel_id="channel-456",
+        api_caller=build_graph_api_caller(fixtures),
+    )
+    source = adapter.fetch("teams:team-123:channel-456:1700000000001")
+
+    assert source.metadata["message_id"] == "1700000000001"
+    with pytest.raises(main.SourceNotFoundError):
+        adapter.fetch("teams:team-123:channel-456:missing")
+
+
+def test_github_connector_does_not_persist_raw_content(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+
+    fixtures = {
+        (
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            "s-kyono/me-shower",
+            "--state",
+            "all",
+            "--limit",
+            "10",
+            "--json",
+            "number,title,body,state,author,createdAt,updatedAt,url,labels",
+        ): main.CommandResult(
+            stdout=json.dumps(
+                [
+                    {
+                        "number": 3,
+                        "title": "Add source normalizer and split source intelligence rules",
+                        "body": "INTERNAL_RAW_BODY_SHOULD_NOT_BE_PERSISTED GraphQL Resolver 分離を実施",
+                        "state": "OPEN",
+                        "author": {"login": "s-kyono"},
+                        "createdAt": "2026-07-10T08:00:00Z",
+                        "updatedAt": "2026-07-11T09:30:00Z",
+                        "url": "https://github.com/s-kyono/me-shower/pull/3",
+                        "labels": [{"name": "source-intelligence"}],
+                    }
+                ]
+            ),
+            stderr="",
+            returncode=0,
+        )
+    }
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_paths = main.normalize_github_sources(
+        repo="s-kyono/me-shower",
+        limit=10,
+        command_runner=build_command_runner(fixtures),
+    )
+
+    assert len(output_paths) == 1
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert "GraphQL Resolver分離を実施" in content
+    assert "INTERNAL_RAW_BODY_SHOULD_NOT_BE_PERSISTED" not in content
+
+
+def test_github_connector_handles_gh_failure() -> None:
+    fixtures = {
+        (
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            "s-kyono/me-shower",
+            "--state",
+            "all",
+            "--limit",
+            "20",
+            "--json",
+            "number,title,body,state,author,createdAt,updatedAt,url,labels",
+        ): main.CommandResult(
+            stdout="",
+            stderr="authentication failed GH_TOKEN=super-secret github_pat_deadbeef",
+            returncode=1,
+        )
+    }
+
+    adapter = main.GitHubSourceAdapter(
+        repo="s-kyono/me-shower",
+        command_runner=build_command_runner(fixtures),
+    )
+
+    with pytest.raises(main.SourceAccessError) as exc_info:
+        adapter.discover()
+
+    message = str(exc_info.value)
+    assert "super-secret" not in message
+    assert "github_pat_deadbeef" not in message
+    assert "GitHub CLI is not authenticated" in message
+
+
+def test_slack_connector_does_not_persist_raw_message(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 10)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "SLACK_RAW_MESSAGE_SENTINEL GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {"ok": False, "error": "message_not_found"},
+    }
+
+    output_paths = main.normalize_slack_sources(
+        channel="C0123456789",
+        limit=10,
+        api_caller=build_slack_api_caller(fixtures),
+    )
+
+    assert len(output_paths) == 1
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert "GraphQL Resolver分離を実施" in content
+    assert "SLACK_RAW_MESSAGE_SENTINEL" not in content
+
+
+def test_slack_connector_does_not_overwrite_existing_source_sync(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    source_sync_dir.mkdir(parents=True, exist_ok=True)
+    existing = source_sync_dir / "2026-06-18.md"
+    existing.write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-06-18",
+                "",
+                "## Event 1",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-06-18",
+                "  source_id: file:daily:1",
+                "  source_type: file",
+                "  category: implementation",
+                "  summary: 既存 file event",
+                "  actions:",
+                "  - 既存 file event",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - none",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: medium",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: sample.txt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 10)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                    "thread_ts": "1781736600.000100",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {"ok": False, "error": "message_not_found"},
+    }
+
+    output_paths = main.normalize_slack_sources(
+        channel="C0123456789",
+        limit=10,
+        api_caller=build_slack_api_caller(fixtures),
+    )
+
+    assert len(output_paths) == 1
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert "既存 file event" in content
+    assert "slack:C0123456789:1781736600.000100" in content
+    assert content.count("## Event 1") == 1
+    assert content.count("## Event 2") == 1
+    assert "## Event 1\n\n## Event" not in content
+
+
+def test_slack_connector_does_not_duplicate_same_message(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 10)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {"ok": False, "error": "message_not_found"},
+    }
+
+    caller = build_slack_api_caller(fixtures)
+    main.normalize_slack_sources(channel="C0123456789", limit=10, api_caller=caller)
+    output_paths = main.normalize_slack_sources(channel="C0123456789", limit=10, api_caller=caller)
+
+    assert len(output_paths) == 1
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert content.count("source_id: slack:C0123456789:1781736600.000100") == 1
+    assert content.count("## Event 1") == 1
+    assert "## Event 2" not in content
+
+
+def test_source_sync_merge_does_not_duplicate_event_headings(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    source_sync_dir.mkdir(parents=True, exist_ok=True)
+    (source_sync_dir / "2026-06-18.md").write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-06-18",
+                "",
+                "## Event 1",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-06-18",
+                "  source_id: file:daily:1",
+                "  source_type: file",
+                "  category: implementation",
+                "  summary: 既存 file event",
+                "  actions:",
+                "  - 既存 file event",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - none",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: medium",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: sample.txt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 10)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {"ok": False, "error": "message_not_found"},
+    }
+
+    output_paths = main.normalize_slack_sources(
+        channel="C0123456789",
+        limit=10,
+        api_caller=build_slack_api_caller(fixtures),
+    )
+
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert content.count("## Event 1") == 1
+    assert content.count("## Event 2") == 1
+    assert "## Event 1\n\n## Event" not in content
+
+
+def test_source_sync_merge_preserves_existing_event_without_source_id(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    source_sync_dir.mkdir(parents=True, exist_ok=True)
+    (source_sync_dir / "2026-06-18.md").write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-06-18",
+                "",
+                "## Event 1",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-06-18",
+                "  source_type: file",
+                "  category: implementation",
+                "  summary: source_id なし既存 event",
+                "  actions:",
+                "  - source_id なし既存 event",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - none",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: medium",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: legacy.txt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 10)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {"ok": False, "error": "message_not_found"},
+    }
+
+    output_paths = main.normalize_slack_sources(
+        channel="C0123456789",
+        limit=10,
+        api_caller=build_slack_api_caller(fixtures),
+    )
+
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert "source_id なし既存 event" in content
+    assert "source_id: slack:C0123456789:1781736600.000100" in content
+    assert content.count("## Event 1") == 1
+    assert content.count("## Event 2") == 1
+
+
+def test_source_sync_merge_does_not_duplicate_same_source_id(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 10)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {"ok": False, "error": "message_not_found"},
+    }
+
+    caller = build_slack_api_caller(fixtures)
+    main.normalize_slack_sources(channel="C0123456789", limit=10, api_caller=caller)
+    output_paths = main.normalize_slack_sources(channel="C0123456789", limit=10, api_caller=caller)
+
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert content.count("source_id: slack:C0123456789:1781736600.000100") == 1
+    assert content.count("## Event 1") == 1
+    assert "## Event 2" not in content
+
+
+def test_slack_connector_handles_api_failure(monkeypatch) -> None:
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-super-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 20)),
+        ): {
+            "ok": False,
+            "error": "invalid_auth xoxb-super-secret",
+        }
+    }
+    adapter = main.SlackSourceAdapter(
+        channel="C0123456789",
+        api_caller=build_slack_api_caller(fixtures),
+    )
+
+    with pytest.raises(main.SourceAccessError) as exc_info:
+        adapter.discover()
+
+    message = str(exc_info.value)
+    assert "xoxb-super-secret" not in message
+    assert "Slack API access denied" in message
+
+
+def test_teams_connector_does_not_persist_raw_message(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("MS_GRAPH_TOKEN", "eyJ.fake.token")
+    fixtures = {
+        (
+            "/v1.0/teams/team-123/channels/channel-456/messages",
+            (("$top", 10),),
+        ): {
+            "value": [
+                {
+                    "id": "1700000000001",
+                    "createdDateTime": "2026-07-11T01:30:00Z",
+                    "lastModifiedDateTime": "2026-07-11T01:45:00Z",
+                    "importance": "normal",
+                    "messageType": "message",
+                    "body": {
+                        "contentType": "html",
+                        "content": "<div>TEAMS_RAW_HTML_SENTINEL GraphQL Resolver を分離した</div>",
+                    },
+                    "from": {"user": {"id": "user-123", "displayName": "山田太郎"}},
+                }
+            ]
+        }
+    }
+
+    output_paths = main.normalize_teams_sources(
+        team_id="team-123",
+        channel_id="channel-456",
+        limit=10,
+        api_caller=build_graph_api_caller(fixtures),
+    )
+
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert "GraphQL Resolver分離を実施" in content
+    assert "TEAMS_RAW_HTML_SENTINEL" not in content
+    assert "<div>" not in content
+
+
+def test_teams_connector_does_not_overwrite_existing_source_sync(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    source_sync_dir.mkdir(parents=True, exist_ok=True)
+    (source_sync_dir / "2026-07-11.md").write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-07-11",
+                "",
+                "## Event 1",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-07-11",
+                "  source_id: file:daily:1",
+                "  source_type: file",
+                "  category: implementation",
+                "  summary: 既存 file event",
+                "  actions:",
+                "  - 既存 file event",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - none",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: medium",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: sample.txt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("MS_GRAPH_TOKEN", "eyJ.fake.token")
+    fixtures = {
+        (
+            "/v1.0/teams/team-123/channels/channel-456/messages",
+            (("$top", 10),),
+        ): {
+            "value": [
+                {
+                    "id": "1700000000001",
+                    "createdDateTime": "2026-07-11T01:30:00Z",
+                    "lastModifiedDateTime": "2026-07-11T01:45:00Z",
+                    "importance": "normal",
+                    "messageType": "message",
+                    "body": {"contentType": "html", "content": "<div>GraphQL Resolver を分離した</div>"},
+                    "from": {"user": {"id": "user-123", "displayName": "山田太郎"}},
+                }
+            ]
+        }
+    }
+
+    output_paths = main.normalize_teams_sources(
+        team_id="team-123",
+        channel_id="channel-456",
+        limit=10,
+        api_caller=build_graph_api_caller(fixtures),
+    )
+
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert "既存 file event" in content
+    assert "teams:team-123:channel-456:1700000000001" in content
+    assert content.count("## Event 1") == 1
+    assert content.count("## Event 2") == 1
+    assert "## Event 1\n\n## Event" not in content
+
+
+def test_teams_connector_does_not_duplicate_same_message(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("MS_GRAPH_TOKEN", "eyJ.fake.token")
+    fixtures = {
+        (
+            "/v1.0/teams/team-123/channels/channel-456/messages",
+            (("$top", 10),),
+        ): {
+            "value": [
+                {
+                    "id": "1700000000001",
+                    "createdDateTime": "2026-07-11T01:30:00Z",
+                    "lastModifiedDateTime": "2026-07-11T01:45:00Z",
+                    "importance": "normal",
+                    "messageType": "message",
+                    "body": {"contentType": "html", "content": "<div>GraphQL Resolver を分離した</div>"},
+                    "from": {"user": {"id": "user-123", "displayName": "山田太郎"}},
+                }
+            ]
+        }
+    }
+
+    caller = build_graph_api_caller(fixtures)
+    main.normalize_teams_sources(team_id="team-123", channel_id="channel-456", limit=10, api_caller=caller)
+    output_paths = main.normalize_teams_sources(team_id="team-123", channel_id="channel-456", limit=10, api_caller=caller)
+
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert content.count("source_id: teams:team-123:channel-456:1700000000001") == 1
+    assert content.count("## Event 1") == 1
+    assert "## Event 2" not in content
+
+
+def test_daily_report_import_does_not_persist_raw_text(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    report = reports_dir / "2026-07-11.md"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    report.write_text(
+        "\n".join(
+            [
+                "# 2026-07-11",
+                "",
+                "今日は眠い",
+                "DAILY_SENTINEL GraphQL Resolver を分離した",
+                "Slack Connector を追加した",
+                "PRで設計指摘を受けた",
+                "昼はラーメン",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_path = main.normalize_daily_report_file(report)
+    content = output_path.read_text(encoding="utf-8")
+
+    assert "DAILY_SENTINEL" not in content
+    assert "GraphQL Resolver分離を実施" in content
+    assert "Slack Connector関連の実装・調査を実施" in content
+    assert "PRレビューで設計指摘を受領" in content
+    assert "今日は眠い" not in content
+    assert "ラーメン" not in content
+
+
+def test_daily_report_import_does_not_overwrite_existing_source_sync(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    source_sync_dir.mkdir(parents=True, exist_ok=True)
+    report = reports_dir / "2026-07-11.md"
+    report.write_text("GraphQL Resolver を分離した", encoding="utf-8")
+    (source_sync_dir / "2026-07-11.md").write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-07-11",
+                "",
+                "## Event 1",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-07-11",
+                "  source_id: github:repo:pr:1",
+                "  source_type: github",
+                "  category: implementation",
+                "  summary: 既存 GitHub event",
+                "  actions:",
+                "  - 既存 GitHub event",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - none",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: medium",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: pr.txt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_path = main.normalize_daily_report_file(report)
+    content = output_path.read_text(encoding="utf-8")
+
+    assert "既存 GitHub event" in content
+    assert "source_id: daily_report:2026-07-11.md" in content
+    assert content.count("## Event 1") == 1
+    assert content.count("## Event 2") == 1
+    assert "## Event 1\n\n## Event" not in content
+
+
+def test_daily_report_import_does_not_duplicate_same_report(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    report = reports_dir / "2026-07-11.md"
+    report.write_text("GraphQL Resolver を分離した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    main.normalize_daily_report_file(report)
+    output_path = main.normalize_daily_report_file(report)
+    content = output_path.read_text(encoding="utf-8")
+
+    assert content.count("source_id: daily_report:2026-07-11.md") == 1
+    assert content.count("## Event 1") == 1
+    assert "## Event 2" not in content
+
+
+def test_daily_report_single_then_bulk_import_does_not_duplicate(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    report = reports_dir / "notes" / "20260710-worklog.txt"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("Slack Connector を追加した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    main.normalize_daily_report_file(report)
+    output_path = main.normalize_daily_reports_dir(reports_dir, limit=20)[0]
+    content = output_path.read_text(encoding="utf-8")
+
+    assert content.count("source_id: daily_report:notes/20260710-worklog.txt") == 1
+    assert content.count("## Event 1") == 1
+    assert "## Event 2" not in content
+
+
+def test_daily_report_free_style_noise_filtering(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    report = reports_dir / "2026-07-11.txt"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    report.write_text(
+        "\n".join(
+            [
+                "今日は眠い",
+                "コーヒー飲んだ",
+                "GraphQL Resolver を分離した",
+                "Slack Connector を追加した",
+                "昼はラーメン",
+                "PRで設計指摘を受けた",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_path = main.normalize_daily_report_file(report)
+    content = output_path.read_text(encoding="utf-8")
+
+    assert "GraphQL Resolver分離を実施" in content
+    assert "Slack Connector関連の実装・調査を実施" in content
+    assert "PRレビューで設計指摘を受領" in content
+    assert "今日は眠い" not in content
+    assert "コーヒー" not in content
+    assert "ラーメン" not in content
+
+
+def test_source_confidence_high_for_structured_github_event() -> None:
+    raw_source = main.RawSource(
+        id="github:s-kyono/me-shower:pr:3",
+        source_type="github",
+        origin="github:s-kyono/me-shower#3",
+        title="PR #3 Add source confidence",
+        content="\n".join(
+            [
+                "PR #3 Add source confidence",
+                "Repository: s-kyono/me-shower",
+                "State: merged",
+                "Labels: source-intelligence, confidence",
+                "Changed Files:",
+                "- app/src/main.py (+120 -12)",
+                "Body:",
+                "GraphQL Resolver を分離し、PRレビューで設計指摘を反映して方針を決定した",
+            ]
+        ),
+        captured_at="2026-07-11T09:30:00+09:00",
+        metadata={
+            "repo": "s-kyono/me-shower",
+            "kind": "pull_request",
+            "number": 3,
+            "state": "merged",
+            "created_at": "2026-07-10T08:00:00Z",
+            "updated_at": "2026-07-11T09:30:00Z",
+            "labels": ["source-intelligence", "confidence"],
+            "changed_files": ["app/src/main.py (+120 -12)"],
+            "source_reference": "github:s-kyono/me-shower#3",
+        },
+    )
+
+    event = main.build_canonical_event_from_raw_source(raw_source)
+
+    assert event["confidence"] == "high"
+    assert "source_type:github" in event["confidence_reasons"]
+    assert any(reason.startswith("actions:") for reason in event["confidence_reasons"])
+
+
+def test_source_confidence_medium_for_daily_report_with_clear_actions_and_noise() -> None:
+    raw_source = main.RawSource(
+        id="daily_report:2026-07-11.md",
+        source_type="daily_report",
+        origin="daily_report:app/data/daily_reports/2026-07-11.md",
+        title="Daily Report 2026-07-11",
+        content="\n".join(
+            [
+                "今日は眠い",
+                "コーヒー飲んだ",
+                "GraphQL Resolver を分離した",
+                "Slack Connector を追加した",
+                "昼はラーメン",
+            ]
+        ),
+        captured_at="2026-07-11",
+        metadata={
+            "kind": "freestyle_report",
+            "path": "/tmp/2026-07-11.md",
+            "relative_path": "2026-07-11.md",
+            "detected_date": "2026-07-11",
+            "source_reference": "daily_report:app/data/daily_reports/2026-07-11.md",
+            "format": "markdown",
+        },
+    )
+
+    event = main.build_canonical_event_from_raw_source(raw_source)
+
+    assert event["confidence"] == "medium"
+    assert "source_type:daily_report" in event["confidence_reasons"]
+    assert any(reason.startswith("noise_removed:") for reason in event["confidence_reasons"])
+
+
+def test_source_confidence_low_for_low_signal_report() -> None:
+    raw_source = main.RawSource(
+        id="daily_report:low-signal.txt",
+        source_type="daily_report",
+        origin="daily_report:app/data/daily_reports/low-signal.txt",
+        title="Daily Report 2026-07-11",
+        content="\n".join(
+            [
+                "今日は眠い",
+                "コーヒー飲んだ",
+                "昼はラーメン",
+            ]
+        ),
+        captured_at="2026-07-11",
+        metadata={
+            "kind": "freestyle_report",
+            "path": "/tmp/low-signal.txt",
+            "relative_path": "low-signal.txt",
+            "detected_date": "2026-07-11",
+            "source_reference": "daily_report:app/data/daily_reports/low-signal.txt",
+            "format": "text",
+        },
+    )
+
+    event = main.build_canonical_event_from_raw_source(raw_source)
+
+    assert event["confidence"] == "low"
+    assert "actions:0" in event["confidence_reasons"]
+
+
+def test_source_confidence_penalizes_unknown_source_type() -> None:
+    raw_source = main.RawSource(
+        id="unknown:1",
+        source_type="unknown",
+        origin="unknown:1",
+        title="Unknown source",
+        content="GraphQL Resolver を分離した",
+        captured_at="2026-07-11",
+        metadata={"path": "/tmp/unknown.txt"},
+    )
+
+    confidence = main.calculate_source_confidence(
+        raw_source=raw_source,
+        source_type="unknown",
+        actions=["GraphQL Resolver分離を実施"],
+        decisions=[],
+        improvements=[],
+        tags=["GraphQL", "Resolver"],
+        tools=[],
+        noise_removed=[],
+        evidence_basis="GraphQL Resolver分離を実施",
+        guard_findings=[],
+    )
+
+    assert confidence.level == "low"
+    assert "penalty:unknown_source_type" in confidence.reasons
+
+
+def test_source_confidence_reasons_do_not_include_raw_text() -> None:
+    raw_source = main.RawSource(
+        id="daily_report:2026-07-11.md",
+        source_type="daily_report",
+        origin="daily_report:app/data/daily_reports/2026-07-11.md",
+        title="Daily Report 2026-07-11",
+        content="CONFIDENCE_SENTINEL GraphQL Resolver を分離した",
+        captured_at="2026-07-11",
+        metadata={
+            "kind": "freestyle_report",
+            "path": "/tmp/2026-07-11.md",
+            "relative_path": "2026-07-11.md",
+            "detected_date": "2026-07-11",
+            "source_reference": "daily_report:app/data/daily_reports/2026-07-11.md",
+            "format": "markdown",
+        },
+    )
+
+    event = main.build_canonical_event_from_raw_source(raw_source)
+
+    assert "CONFIDENCE_SENTINEL" not in "\n".join(event["confidence_reasons"])
+
+
+def test_source_confidence_loaded_from_rules() -> None:
+    rules = main.load_confidence_rules()
+
+    assert rules["source_type_weights"]["github"] == 15
+    assert rules["levels"]["medium"]["min_score"] == 45
+
+
+def test_existing_canonical_event_output_still_contains_confidence(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    raw_file = data_dir / "raw_sources" / "2026-07-11_sample.txt"
+    raw_file.parent.mkdir(parents=True, exist_ok=True)
+    raw_file.write_text("GraphQL Resolver を分離した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_path = main.normalize_source_file(raw_file)
+    content = output_path.read_text(encoding="utf-8")
+
+    assert "confidence:" in content
+    assert "confidence_reasons:" in content
+
+
+def test_teams_connector_handles_api_failure(monkeypatch) -> None:
+    monkeypatch.setenv("MS_GRAPH_TOKEN", "eyJ.super.secret.token")
+    fixtures = {
+        (
+            "/v1.0/teams/team-123/channels/channel-456/messages",
+            (("$top", 20),),
+        ): {
+            "error": {
+                "code": "InvalidAuthenticationToken",
+                "message": "token eyJ.super.secret.token is invalid",
+            }
+        }
+    }
+    adapter = main.TeamsSourceAdapter(
+        team_id="team-123",
+        channel_id="channel-456",
+        api_caller=build_graph_api_caller(fixtures),
+    )
+
+    with pytest.raises(main.SourceAccessError) as exc_info:
+        adapter.discover()
+
+    message = str(exc_info.value)
+    assert "eyJ.super.secret.token" not in message
+    assert "invalid or expired" in message
+
+
+def test_existing_cli_still_works(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    raw_dir = data_dir / "raw_sources"
+    reports_dir = data_dir / "daily_reports"
+    source_sync_dir = data_dir / "source_sync"
+    generated_dir = app_root / "generated"
+    reviews_dir = app_root / "reviews" / "guard"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "2026-07-09_daily.txt").write_text("GraphQL Resolver の分離を実施", encoding="utf-8")
+    write_source_sync_fixture(source_sync_dir)
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GENERATED_DIR", generated_dir)
+    monkeypatch.setattr(main, "SOURCE_TIMELINE_PATH", generated_dir / "source_timeline.md")
+    monkeypatch.setattr(main, "SOURCE_TIMELINE_JSONL_PATH", generated_dir / "source_timeline.jsonl")
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    list_result = runner.invoke(main.app, ["list-source-adapters"])
+    inspect_result = runner.invoke(main.app, ["inspect-source-adapter", "--adapter", "file"])
+    normalize_result = runner.invoke(main.app, ["normalize-sources"])
+    timeline_build_result = runner.invoke(
+        main.app,
+        [
+            "build-source-timeline",
+            "--source-sync-dir",
+            str(source_sync_dir),
+            "--output",
+            str(generated_dir / "source_timeline.md"),
+            "--jsonl-output",
+            str(generated_dir / "source_timeline.jsonl"),
+        ],
+    )
+    timeline_inspect_result = runner.invoke(
+        main.app,
+        [
+            "inspect-source-timeline",
+            "--source-sync-dir",
+            str(source_sync_dir),
+            "--limit",
+            "20",
+        ],
+    )
+
+    assert list_result.exit_code == 0
+    assert "daily_report" in list_result.stdout
+    assert "file" in list_result.stdout
+    assert "github" in list_result.stdout
+    assert "slack" in list_result.stdout
+    assert "teams" in list_result.stdout
+    assert inspect_result.exit_code == 0
+    assert "adapter: file" in inspect_result.stdout
+    assert normalize_result.exit_code == 0
+    assert timeline_build_result.exit_code == 0
+    assert timeline_inspect_result.exit_code == 0
+    assert source_sync_dir.joinpath("2026-07-09.md").exists()
+    assert generated_dir.joinpath("source_timeline.md").exists()
+    assert "Source Timeline" in timeline_inspect_result.stdout
+
+
+def test_resume_agent_hook_is_design_only() -> None:
+    context = main.run_resume_agent_hook("generate-md")
+
+    assert context["trigger"] == "generate-md"
+    assert context["status"] == "design_only"
+    assert context["contract"]["normalizer_scope"] == "raw source -> canonical event / evidence"
+    assert "generate-md" in context["contract"]["activation_points"]
+    assert "issue" in context["contract"]["activation_points"]
+
+
+def test_parse_source_sync_file_extracts_timeline_items(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    source_sync_dir = app_root / "data" / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    items = main.parse_source_sync_file(source_sync_dir / "2026-07-10.md")
+
+    assert len(items) == 2
+    assert items[0].date == "2026-07-10"
+    assert items[0].source_id == "daily_report:2026-07-10.md"
+    assert items[0].source_type == "daily_report"
+    assert items[0].summary == "GraphQL Resolver分離を実施"
+    assert items[0].confidence == "medium"
+    assert items[1].source_id.startswith("unknown:2026-07-10:2")
+
+
+def test_build_source_timeline_outputs_markdown(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    raw_dir = data_dir / "raw_sources"
+    generated_dir = app_root / "generated"
+    write_source_sync_fixture(source_sync_dir)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "sentinel.txt").write_text("RAW_SOURCE_SENTINEL", encoding="utf-8")
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    output_path, _, item_count = main.build_source_timeline(
+        source_sync_dir=source_sync_dir,
+        output_path=generated_dir / "source_timeline.md",
+        jsonl_output_path=None,
+    )
+
+    content = output_path.read_text(encoding="utf-8")
+    assert item_count == 3
+    assert "# Source Timeline" in content
+    assert "GraphQL Resolver分離を実施" in content
+    assert "daily_report:2026-07-10.md" in content
+    assert "### medium · daily_report · implementation" in content
+    assert "RAW_SOURCE_SENTINEL" not in content
+
+
+def test_build_source_timeline_outputs_jsonl(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    source_sync_dir = app_root / "data" / "source_sync"
+    generated_dir = app_root / "generated"
+    write_source_sync_fixture(source_sync_dir)
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    _, jsonl_path, _ = main.build_source_timeline(
+        source_sync_dir=source_sync_dir,
+        output_path=generated_dir / "source_timeline.md",
+        jsonl_output_path=generated_dir / "source_timeline.jsonl",
+    )
+
+    assert jsonl_path is not None
+    lines = [json.loads(line) for line in jsonl_path.read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 3
+    assert all("date" in line for line in lines)
+    assert all("source_id" in line for line in lines)
+    assert all("confidence" in line for line in lines)
+
+
+def test_inspect_source_timeline_filters_by_date_range(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    source_sync_dir = app_root / "data" / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    result = runner.invoke(
+        main.app,
+        [
+            "inspect-source-timeline",
+            "--source-sync-dir",
+            str(source_sync_dir),
+            "--from",
+            "2026-07-10",
+            "--to",
+            "2026-07-10",
+            "--limit",
+            "20",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "2026-07-10" in result.stdout
+    assert "2026-07-11" not in result.stdout
+
+
+def test_inspect_source_timeline_filters_by_source_type(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    source_sync_dir = app_root / "data" / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    result = runner.invoke(
+        main.app,
+        [
+            "inspect-source-timeline",
+            "--source-sync-dir",
+            str(source_sync_dir),
+            "--source-type",
+            "daily_report",
+            "--limit",
+            "20",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "daily_report" in result.stdout
+    assert "slack implementation" not in result.stdout
+    assert "github review" not in result.stdout
+
+
+def test_inspect_source_timeline_filters_by_min_confidence(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    source_sync_dir = app_root / "data" / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    result = runner.invoke(
+        main.app,
+        [
+            "inspect-source-timeline",
+            "--source-sync-dir",
+            str(source_sync_dir),
+            "--min-confidence",
+            "medium",
+            "--limit",
+            "20",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "[high]" in result.stdout
+    assert "[medium]" in result.stdout
+    assert "[low]" not in result.stdout
+
+
+def test_source_timeline_does_not_read_raw_sources(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    raw_dir = data_dir / "raw_sources"
+    generated_dir = app_root / "generated"
+    write_source_sync_fixture(source_sync_dir)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "sentinel.txt").write_text("RAW_SOURCE_SENTINEL", encoding="utf-8")
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    output_path, _, _ = main.build_source_timeline(
+        source_sync_dir=source_sync_dir,
+        output_path=generated_dir / "source_timeline.md",
+        jsonl_output_path=None,
+    )
+
+    assert "RAW_SOURCE_SENTINEL" not in output_path.read_text(encoding="utf-8")
+
+
+def test_source_timeline_does_not_modify_source_sync(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    source_sync_dir = app_root / "data" / "source_sync"
+    generated_dir = app_root / "generated"
+    write_source_sync_fixture(source_sync_dir)
+    before = {path.name: path.read_text(encoding="utf-8") for path in source_sync_dir.glob("*.md")}
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    main.build_source_timeline(
+        source_sync_dir=source_sync_dir,
+        output_path=generated_dir / "source_timeline.md",
+        jsonl_output_path=generated_dir / "source_timeline.jsonl",
+    )
+
+    after = {path.name: path.read_text(encoding="utf-8") for path in source_sync_dir.glob("*.md")}
+    assert after == before
 
 
 def test_loop_skills_writes_review_files(monkeypatch, tmp_path: Path) -> None:

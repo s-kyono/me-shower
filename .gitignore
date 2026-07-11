@@ -30,6 +30,7 @@ app/src/*.egg-info/
 app/tmp/
 
 # Generated resume artifacts can contain personal information.
+
 app/generated/
 app/reviews/
 app/CHANGELOG.md
@@ -41,3 +42,4 @@ app/data/projects/
 app/data/skills/
 
 logs
+epics
