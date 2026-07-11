@@ -21,6 +21,17 @@ def build_command_runner(fixtures: dict[tuple[str, ...], main.CommandResult]):
     return runner
 
 
+def build_slack_api_caller(fixtures: dict[tuple[str, tuple[tuple[str, object], ...]], dict[str, object]]):
+    def caller(method: str, params: dict[str, object]) -> dict[str, object]:
+        normalized = tuple(sorted((key, value) for key, value in params.items() if value is not None))
+        key = (method, normalized)
+        if key not in fixtures:
+            raise AssertionError(f"Unexpected Slack API call: {method} {params}")
+        return fixtures[key]
+
+    return caller
+
+
 def test_load_resume_data_has_projects() -> None:
     data = load_resume_data()
 
@@ -469,9 +480,10 @@ def test_source_adapter_registry_lists_file_adapter(monkeypatch, tmp_path: Path)
 
     assert "file" in registry.list()
     assert "github" in registry.list()
+    assert "slack" in registry.list()
     result = runner.invoke(main.app, ["list-source-adapters"])
     assert result.exit_code == 0
-    assert result.stdout.strip().splitlines() == ["file", "github"]
+    assert result.stdout.strip().splitlines() == ["file", "github", "slack"]
 
 
 def test_inspect_source_adapter_lists_discovered_sources(monkeypatch, tmp_path: Path) -> None:
@@ -698,6 +710,84 @@ def test_github_source_adapter_fetches_source_by_id() -> None:
         adapter.fetch("github:s-kyono/me-shower:pr:999")
 
 
+def test_slack_source_adapter_discovers_messages(monkeypatch) -> None:
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 20)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "SLACK_SENTINEL GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                    "thread_ts": "1781736600.000100",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {
+            "ok": True,
+            "permalink": "https://example.slack.com/archives/C0123456789/p1781736600000100",
+        },
+    }
+
+    adapter = main.SlackSourceAdapter(
+        channel="C0123456789",
+        api_caller=build_slack_api_caller(fixtures),
+    )
+    sources = adapter.discover()
+
+    assert len(sources) == 1
+    source = sources[0]
+    assert source.source_type == "slack"
+    assert source.metadata["kind"] == "message"
+    assert source.id == "slack:C0123456789:1781736600.000100"
+    assert source.origin == "slack:C0123456789:1781736600.000100"
+    assert "SLACK_SENTINEL GraphQL Resolver を分離した" in source.content
+    assert source.metadata["permalink"] == "https://example.slack.com/archives/C0123456789/p1781736600000100"
+
+
+def test_slack_source_adapter_fetches_source_by_id(monkeypatch) -> None:
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 20)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {
+            "ok": True,
+            "permalink": "https://example.slack.com/archives/C0123456789/p1781736600000100",
+        },
+    }
+
+    adapter = main.SlackSourceAdapter(
+        channel="C0123456789",
+        api_caller=build_slack_api_caller(fixtures),
+    )
+    source = adapter.fetch("slack:C0123456789:1781736600.000100")
+
+    assert source.metadata["ts"] == "1781736600.000100"
+    with pytest.raises(main.SourceNotFoundError):
+        adapter.fetch("slack:C0123456789:missing")
+
+
 def test_github_connector_does_not_persist_raw_content(monkeypatch, tmp_path: Path) -> None:
     app_root = tmp_path / "app"
     data_dir = app_root / "data"
@@ -788,6 +878,397 @@ def test_github_connector_handles_gh_failure() -> None:
     assert "super-secret" not in message
     assert "github_pat_deadbeef" not in message
     assert "GitHub CLI is not authenticated" in message
+
+
+def test_slack_connector_does_not_persist_raw_message(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 10)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "SLACK_RAW_MESSAGE_SENTINEL GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {"ok": False, "error": "message_not_found"},
+    }
+
+    output_paths = main.normalize_slack_sources(
+        channel="C0123456789",
+        limit=10,
+        api_caller=build_slack_api_caller(fixtures),
+    )
+
+    assert len(output_paths) == 1
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert "GraphQL Resolver分離を実施" in content
+    assert "SLACK_RAW_MESSAGE_SENTINEL" not in content
+
+
+def test_slack_connector_does_not_overwrite_existing_source_sync(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    source_sync_dir.mkdir(parents=True, exist_ok=True)
+    existing = source_sync_dir / "2026-06-18.md"
+    existing.write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-06-18",
+                "",
+                "## Event 1",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-06-18",
+                "  source_id: file:daily:1",
+                "  source_type: file",
+                "  category: implementation",
+                "  summary: 既存 file event",
+                "  actions:",
+                "  - 既存 file event",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - none",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: medium",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: sample.txt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 10)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                    "thread_ts": "1781736600.000100",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {"ok": False, "error": "message_not_found"},
+    }
+
+    output_paths = main.normalize_slack_sources(
+        channel="C0123456789",
+        limit=10,
+        api_caller=build_slack_api_caller(fixtures),
+    )
+
+    assert len(output_paths) == 1
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert "既存 file event" in content
+    assert "slack:C0123456789:1781736600.000100" in content
+    assert content.count("## Event 1") == 1
+    assert content.count("## Event 2") == 1
+    assert "## Event 1\n\n## Event" not in content
+
+
+def test_slack_connector_does_not_duplicate_same_message(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 10)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {"ok": False, "error": "message_not_found"},
+    }
+
+    caller = build_slack_api_caller(fixtures)
+    main.normalize_slack_sources(channel="C0123456789", limit=10, api_caller=caller)
+    output_paths = main.normalize_slack_sources(channel="C0123456789", limit=10, api_caller=caller)
+
+    assert len(output_paths) == 1
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert content.count("source_id: slack:C0123456789:1781736600.000100") == 1
+    assert content.count("## Event 1") == 1
+    assert "## Event 2" not in content
+
+
+def test_source_sync_merge_does_not_duplicate_event_headings(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    source_sync_dir.mkdir(parents=True, exist_ok=True)
+    (source_sync_dir / "2026-06-18.md").write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-06-18",
+                "",
+                "## Event 1",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-06-18",
+                "  source_id: file:daily:1",
+                "  source_type: file",
+                "  category: implementation",
+                "  summary: 既存 file event",
+                "  actions:",
+                "  - 既存 file event",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - none",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: medium",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: sample.txt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 10)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {"ok": False, "error": "message_not_found"},
+    }
+
+    output_paths = main.normalize_slack_sources(
+        channel="C0123456789",
+        limit=10,
+        api_caller=build_slack_api_caller(fixtures),
+    )
+
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert content.count("## Event 1") == 1
+    assert content.count("## Event 2") == 1
+    assert "## Event 1\n\n## Event" not in content
+
+
+def test_source_sync_merge_preserves_existing_event_without_source_id(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    source_sync_dir.mkdir(parents=True, exist_ok=True)
+    (source_sync_dir / "2026-06-18.md").write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-06-18",
+                "",
+                "## Event 1",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-06-18",
+                "  source_type: file",
+                "  category: implementation",
+                "  summary: source_id なし既存 event",
+                "  actions:",
+                "  - source_id なし既存 event",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - none",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: medium",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: legacy.txt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 10)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {"ok": False, "error": "message_not_found"},
+    }
+
+    output_paths = main.normalize_slack_sources(
+        channel="C0123456789",
+        limit=10,
+        api_caller=build_slack_api_caller(fixtures),
+    )
+
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert "source_id なし既存 event" in content
+    assert "source_id: slack:C0123456789:1781736600.000100" in content
+    assert content.count("## Event 1") == 1
+    assert content.count("## Event 2") == 1
+
+
+def test_source_sync_merge_does_not_duplicate_same_source_id(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 10)),
+        ): {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1781736600.000100",
+                    "text": "GraphQL Resolver を分離した",
+                    "user": "U12345678",
+                }
+            ],
+        },
+        (
+            "chat.getPermalink",
+            (("channel", "C0123456789"), ("message_ts", "1781736600.000100")),
+        ): {"ok": False, "error": "message_not_found"},
+    }
+
+    caller = build_slack_api_caller(fixtures)
+    main.normalize_slack_sources(channel="C0123456789", limit=10, api_caller=caller)
+    output_paths = main.normalize_slack_sources(channel="C0123456789", limit=10, api_caller=caller)
+
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert content.count("source_id: slack:C0123456789:1781736600.000100") == 1
+    assert content.count("## Event 1") == 1
+    assert "## Event 2" not in content
+
+
+def test_slack_connector_handles_api_failure(monkeypatch) -> None:
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-super-secret")
+    fixtures = {
+        (
+            "conversations.history",
+            (("channel", "C0123456789"), ("inclusive", True), ("limit", 20)),
+        ): {
+            "ok": False,
+            "error": "invalid_auth xoxb-super-secret",
+        }
+    }
+    adapter = main.SlackSourceAdapter(
+        channel="C0123456789",
+        api_caller=build_slack_api_caller(fixtures),
+    )
+
+    with pytest.raises(main.SourceAccessError) as exc_info:
+        adapter.discover()
+
+    message = str(exc_info.value)
+    assert "xoxb-super-secret" not in message
+    assert "Slack API access denied" in message
 
 
 def test_existing_source_adapter_cli_still_works(monkeypatch, tmp_path: Path) -> None:
