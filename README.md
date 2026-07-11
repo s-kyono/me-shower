@@ -7,6 +7,17 @@
 
 原本Excelは参考テンプレートとして扱い、成果物は `app/generated/職務経歴書.pdf` とします。
 
+## Concept Docs
+
+me-shower は、仕事の痕跡・証跡・Human Review から Career Knowledge を育てる Personal Career Operating System です。
+
+詳しくは以下を参照してください。
+
+- `docs/ja/00_vision.md`
+- `docs/ja/01_concepts.md`
+- `docs/ja/02_architecture.md`
+- `docs/ja/03_operating_model.md`
+
 ## ディレクトリ構成
 
 ```text
