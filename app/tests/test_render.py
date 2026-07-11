@@ -11,6 +11,16 @@ from typer.testing import CliRunner
 runner = CliRunner()
 
 
+def build_command_runner(fixtures: dict[tuple[str, ...], main.CommandResult]):
+    def runner(command: list[str]) -> main.CommandResult:
+        key = tuple(command)
+        if key not in fixtures:
+            raise AssertionError(f"Unexpected command: {command}")
+        return fixtures[key]
+
+    return runner
+
+
 def test_load_resume_data_has_projects() -> None:
     data = load_resume_data()
 
@@ -443,7 +453,7 @@ def test_file_source_adapter_fetches_source_by_id(monkeypatch, tmp_path: Path) -
     source = adapter.fetch("2026-07-09_sample.txt")
 
     assert source.content == "PR レビューを実施"
-    with pytest.raises(main.typer.BadParameter):
+    with pytest.raises(main.SourceNotFoundError):
         adapter.fetch("missing.txt")
 
 
@@ -458,9 +468,10 @@ def test_source_adapter_registry_lists_file_adapter(monkeypatch, tmp_path: Path)
     registry = main.build_source_adapter_registry()
 
     assert "file" in registry.list()
+    assert "github" in registry.list()
     result = runner.invoke(main.app, ["list-source-adapters"])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "file"
+    assert result.stdout.strip().splitlines() == ["file", "github"]
 
 
 def test_inspect_source_adapter_lists_discovered_sources(monkeypatch, tmp_path: Path) -> None:
@@ -571,6 +582,239 @@ def test_normalize_source_filters_low_signal_noisy_input(monkeypatch, tmp_path: 
     assert "weather" in content
     assert "meal" in content
     assert "low_signal" in content
+
+
+def test_github_source_adapter_discovers_pull_requests() -> None:
+    fixtures = {
+        (
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            "s-kyono/me-shower",
+            "--state",
+            "all",
+            "--limit",
+            "20",
+            "--json",
+            "number,title,body,state,author,createdAt,updatedAt,url,labels",
+        ): main.CommandResult(
+            stdout=json.dumps(
+                [
+                    {
+                        "number": 3,
+                        "title": "Add source normalizer and split source intelligence rules",
+                        "body": "GraphQL Resolver を分離し、正規化ルールを整理した",
+                        "state": "OPEN",
+                        "author": {"login": "s-kyono"},
+                        "createdAt": "2026-07-10T08:00:00Z",
+                        "updatedAt": "2026-07-11T09:30:00Z",
+                        "url": "https://github.com/s-kyono/me-shower/pull/3",
+                        "labels": [{"name": "source-intelligence"}, {"name": "normalizer"}],
+                    }
+                ]
+            ),
+            stderr="",
+            returncode=0,
+        )
+    }
+
+    adapter = main.GitHubSourceAdapter(
+        repo="s-kyono/me-shower",
+        command_runner=build_command_runner(fixtures),
+    )
+    sources = adapter.discover()
+
+    assert len(sources) == 1
+    source = sources[0]
+    assert source.source_type == "github"
+    assert source.metadata["kind"] == "pull_request"
+    assert source.id == "github:s-kyono/me-shower:pr:3"
+    assert source.origin == "github:s-kyono/me-shower#3"
+    assert "PR #3 Add source normalizer and split source intelligence rules" in source.content
+    assert "GraphQL Resolver を分離し、正規化ルールを整理した" in source.content
+
+
+def test_github_source_adapter_fetches_source_by_id() -> None:
+    fixtures = {
+        (
+            "gh",
+            "pr",
+            "view",
+            "3",
+            "--repo",
+            "s-kyono/me-shower",
+            "--json",
+            "number,title,body,state,author,createdAt,updatedAt,url,labels,files",
+        ): main.CommandResult(
+            stdout=json.dumps(
+                {
+                    "number": 3,
+                    "title": "Add source normalizer and split source intelligence rules",
+                    "body": "Resolver 分離とルール整理を実施",
+                    "state": "MERGED",
+                    "author": {"login": "s-kyono"},
+                    "createdAt": "2026-07-10T08:00:00Z",
+                    "updatedAt": "2026-07-11T09:30:00Z",
+                    "url": "https://github.com/s-kyono/me-shower/pull/3",
+                    "labels": [{"name": "source-intelligence"}],
+                    "files": [
+                        {"path": "app/src/main.py", "additions": 120, "deletions": 12},
+                        {"path": "app/tests/test_render.py", "additions": 40, "deletions": 0},
+                    ],
+                }
+            ),
+            stderr="",
+            returncode=0,
+        ),
+        (
+            "gh",
+            "pr",
+            "view",
+            "999",
+            "--repo",
+            "s-kyono/me-shower",
+            "--json",
+            "number,title,body,state,author,createdAt,updatedAt,url,labels,files",
+        ): main.CommandResult(
+            stdout="",
+            stderr="pull request not found",
+            returncode=1,
+        ),
+    }
+
+    adapter = main.GitHubSourceAdapter(
+        repo="s-kyono/me-shower",
+        command_runner=build_command_runner(fixtures),
+    )
+    source = adapter.fetch("github:s-kyono/me-shower:pr:3")
+
+    assert source.metadata["number"] == 3
+    assert source.metadata["changed_files"] == [
+        "app/src/main.py (+120 -12)",
+        "app/tests/test_render.py (+40 -0)",
+    ]
+    with pytest.raises(main.SourceNotFoundError):
+        adapter.fetch("github:s-kyono/me-shower:pr:999")
+
+
+def test_github_connector_does_not_persist_raw_content(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+
+    fixtures = {
+        (
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            "s-kyono/me-shower",
+            "--state",
+            "all",
+            "--limit",
+            "10",
+            "--json",
+            "number,title,body,state,author,createdAt,updatedAt,url,labels",
+        ): main.CommandResult(
+            stdout=json.dumps(
+                [
+                    {
+                        "number": 3,
+                        "title": "Add source normalizer and split source intelligence rules",
+                        "body": "INTERNAL_RAW_BODY_SHOULD_NOT_BE_PERSISTED GraphQL Resolver 分離を実施",
+                        "state": "OPEN",
+                        "author": {"login": "s-kyono"},
+                        "createdAt": "2026-07-10T08:00:00Z",
+                        "updatedAt": "2026-07-11T09:30:00Z",
+                        "url": "https://github.com/s-kyono/me-shower/pull/3",
+                        "labels": [{"name": "source-intelligence"}],
+                    }
+                ]
+            ),
+            stderr="",
+            returncode=0,
+        )
+    }
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_paths = main.normalize_github_sources(
+        repo="s-kyono/me-shower",
+        limit=10,
+        command_runner=build_command_runner(fixtures),
+    )
+
+    assert len(output_paths) == 1
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert "GraphQL Resolver分離を実施" in content
+    assert "INTERNAL_RAW_BODY_SHOULD_NOT_BE_PERSISTED" not in content
+
+
+def test_github_connector_handles_gh_failure() -> None:
+    fixtures = {
+        (
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            "s-kyono/me-shower",
+            "--state",
+            "all",
+            "--limit",
+            "20",
+            "--json",
+            "number,title,body,state,author,createdAt,updatedAt,url,labels",
+        ): main.CommandResult(
+            stdout="",
+            stderr="authentication failed GH_TOKEN=super-secret github_pat_deadbeef",
+            returncode=1,
+        )
+    }
+
+    adapter = main.GitHubSourceAdapter(
+        repo="s-kyono/me-shower",
+        command_runner=build_command_runner(fixtures),
+    )
+
+    with pytest.raises(main.SourceAccessError) as exc_info:
+        adapter.discover()
+
+    message = str(exc_info.value)
+    assert "super-secret" not in message
+    assert "github_pat_deadbeef" not in message
+    assert "GitHub CLI is not authenticated" in message
+
+
+def test_existing_source_adapter_cli_still_works(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    raw_dir = data_dir / "raw_sources"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "2026-07-09_daily.txt").write_text("GraphQL Resolver の分離を実施", encoding="utf-8")
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    list_result = runner.invoke(main.app, ["list-source-adapters"])
+    inspect_result = runner.invoke(main.app, ["inspect-source-adapter", "--adapter", "file"])
+    normalize_result = runner.invoke(main.app, ["normalize-sources"])
+
+    assert list_result.exit_code == 0
+    assert "file" in list_result.stdout
+    assert "github" in list_result.stdout
+    assert inspect_result.exit_code == 0
+    assert "adapter: file" in inspect_result.stdout
+    assert normalize_result.exit_code == 0
+    assert source_sync_dir.joinpath("2026-07-09.md").exists()
 
 
 def test_resume_agent_hook_is_design_only() -> None:
