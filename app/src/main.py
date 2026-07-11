@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 import re
 import shutil
 import subprocess
 from typing import Any, Callable, Protocol
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 import typer
 import yaml
@@ -149,6 +153,7 @@ class CommandResult:
 
 
 CommandRunner = Callable[[list[str]], CommandResult]
+SlackApiCaller = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 
 def run_command(command: list[str]) -> CommandResult:
@@ -377,6 +382,191 @@ class GitHubSourceAdapter:
             else:
                 result.append(path)
         return result
+
+
+def call_slack_api(method: str, params: dict[str, Any], *, token: str) -> dict[str, Any]:
+    encoded = urlencode({key: value for key, value in params.items() if value is not None}).encode("utf-8")
+    request = Request(
+        url=f"https://slack.com/api/{method}",
+        data=encoded,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request) as response:
+            payload = response.read().decode("utf-8")
+    except HTTPError as exc:
+        message = sanitize_slack_error_message(exc.read().decode("utf-8", errors="replace") or str(exc))
+        if exc.code == 429:
+            raise SourceAccessError("Slack API rate limit exceeded.") from exc
+        raise SourceAccessError(f"Slack API request failed: {message or 'http error'}") from exc
+    except URLError as exc:
+        raise SourceAccessError(f"Slack API request failed: {sanitize_slack_error_message(str(exc.reason))}") from exc
+
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise SourceAccessError("Failed to parse Slack API JSON response.") from exc
+    if not isinstance(parsed, dict):
+        raise SourceAccessError("Failed to parse Slack API response.")
+    return parsed
+
+
+class SlackSourceAdapter:
+    name = "slack"
+
+    def __init__(
+        self,
+        channel: str,
+        limit: int = 20,
+        token_env: str = "SLACK_BOT_TOKEN",
+        oldest: str | None = None,
+        latest: str | None = None,
+        api_caller: SlackApiCaller | None = None,
+    ) -> None:
+        self.channel = channel
+        self.limit = limit
+        self.token_env = token_env
+        self.oldest = oldest
+        self.latest = latest
+        self._api_caller = api_caller
+
+    def discover(self) -> list[RawSource]:
+        messages = self._fetch_messages()
+        return [self._build_raw_source(message) for message in messages]
+
+    def fetch(self, source_id: str) -> RawSource:
+        for source in self.discover():
+            if source.id == source_id:
+                return source
+        raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+
+    def _fetch_messages(self) -> list[dict[str, Any]]:
+        payload = self._call_api(
+            "conversations.history",
+            {
+                "channel": self.channel,
+                "limit": self.limit,
+                "oldest": self.oldest,
+                "latest": self.latest,
+                "inclusive": True,
+            },
+        )
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            raise SourceAccessError("Slack API did not return a valid message list.")
+        return [item for item in messages if isinstance(item, dict) and str(item.get("ts") or "").strip()]
+
+    def _call_api(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        token = self._resolve_token()
+        caller = self._api_caller or (lambda api_method, api_params: call_slack_api(api_method, api_params, token=token))
+        try:
+            payload = caller(method, params)
+        except SourceAdapterError:
+            raise
+        except Exception as exc:
+            raise SourceAccessError(f"Slack API request failed: {sanitize_slack_error_message(str(exc))}") from exc
+        if not isinstance(payload, dict):
+            raise SourceAccessError("Failed to parse Slack API response.")
+        if payload.get("ok") is False:
+            raise self._build_api_error(payload)
+        return payload
+
+    def _resolve_token(self) -> str:
+        token = os.getenv(self.token_env, "").strip()
+        if not token:
+            raise SourceAccessError(f"Slack token environment variable is not set: {self.token_env}")
+        return token
+
+    def _build_api_error(self, payload: dict[str, Any]) -> SourceAdapterError:
+        error_code = str(payload.get("error") or "unknown_error").strip()
+        normalized_error_code = error_code.split()[0] if error_code else "unknown_error"
+        if normalized_error_code in {"channel_not_found", "message_not_found"}:
+            return SourceNotFoundError(f"Slack resource not found: {normalized_error_code}")
+        if normalized_error_code in {"not_in_channel", "missing_scope", "invalid_auth", "not_authed", "account_inactive"}:
+            return SourceAccessError(f"Slack API access denied: {normalized_error_code}")
+        if normalized_error_code == "ratelimited":
+            return SourceAccessError("Slack API rate limit exceeded.")
+        return SourceAccessError(f"Slack API request failed: {sanitize_slack_error_message(error_code)}")
+
+    def _build_raw_source(self, payload: dict[str, Any]) -> RawSource:
+        ts = str(payload.get("ts") or "").strip()
+        thread_ts = str(payload.get("thread_ts") or "").strip()
+        user = str(payload.get("user") or payload.get("bot_id") or "").strip()
+        text = str(payload.get("text") or "").strip()
+        subtype = str(payload.get("subtype") or "").strip()
+        message_datetime = slack_ts_to_datetime(ts)
+        permalink = self._get_permalink(ts)
+
+        metadata: dict[str, Any] = {
+            "channel": self.channel,
+            "kind": "message",
+            "ts": ts,
+            "thread_ts": thread_ts,
+            "user": user,
+            "created_at": message_datetime.isoformat(timespec="seconds"),
+        }
+        if subtype:
+            metadata["subtype"] = subtype
+        if permalink:
+            metadata["permalink"] = permalink
+
+        return RawSource(
+            id=f"slack:{self.channel}:{ts}",
+            source_type="slack",
+            origin=f"slack:{self.channel}:{ts}",
+            title=f"Slack message {message_datetime.strftime('%Y-%m-%d %H:%M')}",
+            content=self._build_content(
+                text=text,
+                channel=self.channel,
+                ts=ts,
+                thread_ts=thread_ts,
+                user=user,
+                created_at=message_datetime.isoformat(timespec="seconds"),
+                subtype=subtype,
+                permalink=permalink,
+            ),
+            captured_at=message_datetime.isoformat(timespec="seconds"),
+            metadata=metadata,
+        )
+
+    def _get_permalink(self, message_ts: str) -> str:
+        try:
+            payload = self._call_api("chat.getPermalink", {"channel": self.channel, "message_ts": message_ts})
+        except SourceAdapterError:
+            return ""
+        permalink = payload.get("permalink")
+        if isinstance(permalink, str):
+            return permalink.strip()
+        return ""
+
+    def _build_content(
+        self,
+        *,
+        text: str,
+        channel: str,
+        ts: str,
+        thread_ts: str,
+        user: str,
+        created_at: str,
+        subtype: str,
+        permalink: str,
+    ) -> str:
+        lines = [
+            f"Slack Channel: {channel}",
+            f"Message TS: {ts}",
+            f"Thread TS: {thread_ts or 'none'}",
+            f"User: {user or 'unknown'}",
+            f"Created At: {created_at}",
+            f"Subtype: {subtype or 'none'}",
+        ]
+        if permalink:
+            lines.append(f"Permalink: {permalink}")
+        lines.extend(["Text:", text or "(empty)"])
+        return "\n".join(lines)
 
 
 class SourceAdapterRegistry:
@@ -998,6 +1188,12 @@ def resolve_input_path(path_text: str) -> Path:
 def build_source_adapter_registry(github_repo: str | None = None) -> SourceAdapterRegistry:
     registry = SourceAdapterRegistry()
     registry.register(FileSourceAdapter(DATA_DIR / "raw_sources"))
+    registry.register(
+        UnconfiguredSourceAdapter(
+            "slack",
+            "Slack adapter requires a channel and token env. Use inspect-slack-source or normalize-slack-source.",
+        )
+    )
     if github_repo:
         registry.register(GitHubSourceAdapter(repo=github_repo))
     else:
@@ -1901,7 +2097,7 @@ def build_canonical_event_from_raw_source(raw_source: RawSource) -> dict[str, An
         default=("communication", 0),
     )[0]
     summary = actions[0] if actions else "作業上有意な技術イベントを抽出できなかった"
-    if raw_source.source_type == "github":
+    if raw_source.source_type in {"github", "slack"}:
         evidence_basis = " / ".join(dedupe_preserving_order(actions[:3] + decisions[:2] + improvements[:2]))
     else:
         evidence_basis = " / ".join(kept_lines[:3]) if kept_lines else "有意な技術イベントなし"
@@ -1912,6 +2108,7 @@ def build_canonical_event_from_raw_source(raw_source: RawSource) -> dict[str, An
     return {
         "schema": str(load_evidence_rules().get("schema", "canonical_event_v0")),
         "date": date_text,
+        "source_id": raw_source.id,
         "source_type": source_type,
         "category": dominant_category if kept_lines else "noise",
         "summary": summary,
@@ -2003,6 +2200,7 @@ def format_canonical_event(event: dict[str, Any]) -> str:
     lines = [
         "- schema: " + str(event["schema"]),
         "- date: " + str(event["date"]),
+        "  source_id: " + str(event.get("source_id", "unknown")),
         "  source_type: " + str(event["source_type"]),
         "  category: " + str(event["category"]),
         "  summary: " + str(event["summary"]),
@@ -2025,18 +2223,53 @@ def format_canonical_event(event: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def read_source_sync_event_blocks(output_path: Path) -> tuple[str | None, list[str]]:
+    if not output_path.exists():
+        return None, []
+    content = output_path.read_text(encoding="utf-8")
+    date_match = re.search(r"(?m)^date:\s*(\d{4}-\d{2}-\d{2})\s*$", content)
+    event_matches = list(re.finditer(r"(?m)^## Event \d+\s*$", content))
+    if not event_matches:
+        return (date_match.group(1) if date_match else None), []
+    blocks: list[str] = []
+    for index, match in enumerate(event_matches):
+        start = match.end()
+        end = event_matches[index + 1].start() if index + 1 < len(event_matches) else len(content)
+        blocks.append(content[start:end].strip())
+    return (date_match.group(1) if date_match else None), blocks
+
+
+def extract_source_id_from_event_block(block: str) -> str | None:
+    match = re.search(r"(?m)^  source_id:\s*(.+?)\s*$", block)
+    if not match:
+        return None
+    source_id = match.group(1).strip()
+    return source_id or None
+
+
 def write_source_sync_file(target_date: str, events: list[dict[str, Any]]) -> Path:
     SOURCE_SYNC_DIR.mkdir(parents=True, exist_ok=True)
     output_path = SOURCE_SYNC_DIR / f"{target_date}.md"
+    _, existing_blocks = read_source_sync_event_blocks(output_path)
+    existing_source_ids = {source_id for block in existing_blocks if (source_id := extract_source_id_from_event_block(block))}
+    merged_blocks = list(existing_blocks)
+    for event in events:
+        source_id = str(event.get("source_id") or "").strip()
+        if source_id and source_id in existing_source_ids:
+            continue
+        block = format_canonical_event(event)
+        merged_blocks.append(block)
+        if source_id:
+            existing_source_ids.add(source_id)
     body = [
         "# Canonical Events",
         "",
         f"date: {target_date}",
         "",
     ]
-    for index, event in enumerate(events, start=1):
+    for index, block in enumerate(merged_blocks, start=1):
         body.append(f"## Event {index}")
-        body.append(format_canonical_event(event))
+        body.append(block)
         body.append("")
     output_path.write_text("\n".join(body).rstrip() + "\n", encoding="utf-8")
     return output_path
@@ -2067,6 +2300,53 @@ def normalize_all_sources() -> list[Path]:
 def normalize_github_sources(repo: str, limit: int = 20, command_runner: CommandRunner | None = None) -> list[Path]:
     adapter = GitHubSourceAdapter(repo=repo, limit=limit, command_runner=command_runner)
     return normalize_raw_sources(adapter.discover(), action_label="normalize-github-source")
+
+
+def parse_cli_datetime(value: str | None) -> str | None:
+    if value is None:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return slack_datetime_to_api_ts(parsed)
+
+
+def slack_ts_to_datetime(value: str) -> datetime:
+    try:
+        timestamp = float(value)
+    except ValueError as exc:
+        raise SourceAccessError(f"Invalid Slack timestamp: {value}") from exc
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone()
+
+
+def slack_datetime_to_api_ts(value: datetime) -> str:
+    return f"{value.timestamp():.6f}"
+
+
+def sanitize_slack_error_message(message: str) -> str:
+    sanitized = sanitize_command_error(message)
+    sanitized = re.sub(r"xox[baprs]-[A-Za-z0-9-]+", "[REDACTED_SLACK_TOKEN]", sanitized)
+    return sanitized.strip()
+
+
+def normalize_slack_sources(
+    channel: str,
+    *,
+    limit: int = 20,
+    token_env: str = "SLACK_BOT_TOKEN",
+    oldest: str | None = None,
+    latest: str | None = None,
+    api_caller: SlackApiCaller | None = None,
+) -> list[Path]:
+    adapter = SlackSourceAdapter(
+        channel=channel,
+        limit=limit,
+        token_env=token_env,
+        oldest=oldest,
+        latest=latest,
+        api_caller=api_caller,
+    )
+    return normalize_raw_sources(adapter.discover(), action_label="normalize-slack-source")
 
 
 def issue_resume(title: str, note: str, theme: str = "forest") -> Path:
@@ -2188,6 +2468,37 @@ def inspect_github_source(
         typer.echo(f"  origin: {source.origin}")
 
 
+@app.command("inspect-slack-source")
+def inspect_slack_source(
+    channel: str = typer.Option(..., "--channel", help="Slack channel ID"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of messages to inspect"),
+    token_env: str = typer.Option("SLACK_BOT_TOKEN", "--token-env", help="Environment variable that holds the Slack bot token"),
+    oldest: str | None = typer.Option(None, "--oldest", help="Oldest message time in ISO 8601"),
+    latest: str | None = typer.Option(None, "--latest", help="Latest message time in ISO 8601"),
+) -> None:
+    """Inspect Slack messages as raw sources."""
+    adapter = SlackSourceAdapter(
+        channel=channel,
+        limit=limit,
+        token_env=token_env,
+        oldest=parse_cli_datetime(oldest),
+        latest=parse_cli_datetime(latest),
+    )
+    try:
+        sources = adapter.discover()
+    except SourceAdapterError as exc:
+        typer.echo(f"Slack source inspection failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"adapter: {adapter.name}")
+    typer.echo(f"channel: {channel}")
+    typer.echo(f"discovered_sources: {len(sources)}")
+    for source in sources:
+        typer.echo(f"- id: {source.id}")
+        typer.echo(f"  title: {source.title}")
+        typer.echo(f"  origin: {source.origin}")
+
+
 @app.command("normalize-github-source")
 def normalize_github_source(
     repo: str = typer.Option(..., "--repo", help="GitHub repository in owner/name format"),
@@ -2204,6 +2515,35 @@ def normalize_github_source(
         typer.echo("No GitHub pull requests found.")
         return
     typer.echo(f"Normalized {len(output_paths)} day files from GitHub")
+    for path in output_paths:
+        typer.echo(f"- {path.relative_to(ROOT)}")
+
+
+@app.command("normalize-slack-source")
+def normalize_slack_source(
+    channel: str = typer.Option(..., "--channel", help="Slack channel ID"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of messages to normalize"),
+    token_env: str = typer.Option("SLACK_BOT_TOKEN", "--token-env", help="Environment variable that holds the Slack bot token"),
+    oldest: str | None = typer.Option(None, "--oldest", help="Oldest message time in ISO 8601"),
+    latest: str | None = typer.Option(None, "--latest", help="Latest message time in ISO 8601"),
+) -> None:
+    """Normalize Slack messages into canonical event markdown files."""
+    try:
+        output_paths = normalize_slack_sources(
+            channel=channel,
+            limit=limit,
+            token_env=token_env,
+            oldest=parse_cli_datetime(oldest),
+            latest=parse_cli_datetime(latest),
+        )
+    except SourceAdapterError as exc:
+        typer.echo(f"Slack source normalization failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not output_paths:
+        typer.echo("No Slack messages found.")
+        return
+    typer.echo(f"Normalized {len(output_paths)} day files from Slack")
     for path in output_paths:
         typer.echo(f"- {path.relative_to(ROOT)}")
 

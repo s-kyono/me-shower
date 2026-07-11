@@ -62,6 +62,12 @@ uv run me-shower normalize-source --file app/data/raw_sources/sample.txt
 # raw source を一括正規化
 uv run me-shower normalize-sources
 
+# Slack source を inspect
+uv run me-shower inspect-slack-source --channel C0123456789 --limit 20 --token-env SLACK_BOT_TOKEN
+
+# Slack source を正規化
+uv run me-shower normalize-slack-source --channel C0123456789 --limit 20 --token-env SLACK_BOT_TOKEN
+
 # Skill改善提案を生成
 uv run me-shower loop-skills
 
@@ -113,6 +119,22 @@ uv run me-shower normalize-sources
 ```
 
 `app/data/raw_sources/*.txt` をまとめて正規化し、日付ごとの `app/data/source_sync/YYYY-MM-DD.md` を生成します。Learning Loop はこの `source_sync` を入力として利用します。resume 向けの選別や言い換えはここでは行わず、`generate-md` / `issue` の Resume Agent Hook で扱う前提です。
+
+### `uv run me-shower inspect-slack-source`
+
+```bash
+uv run me-shower inspect-slack-source --channel C0123456789 --limit 20 --token-env SLACK_BOT_TOKEN
+```
+
+Slack channel history を `RawSource` として確認します。token は CLI 引数ではなく環境変数名で指定し、inspect 出力には raw message text を出しません。
+
+### `uv run me-shower normalize-slack-source`
+
+```bash
+uv run me-shower normalize-slack-source --channel C0123456789 --limit 20 --token-env SLACK_BOT_TOKEN
+```
+
+Slack message を `RawSource` として取得し、Evidence Guard と Noisy Input Normalization を通して `app/data/source_sync/YYYY-MM-DD.md` に追記します。raw Slack message 本文や token は保存せず、既存の同日 `source_sync` を消さずに `source_id` ベースで重複を防ぎます。
 
 ### `uv run me-shower loop-skills`
 
