@@ -479,23 +479,137 @@ def test_file_source_adapter_fetches_source_by_id(monkeypatch, tmp_path: Path) -
         adapter.fetch("missing.txt")
 
 
+def test_daily_report_source_adapter_discovers_reports(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    reports_dir = data_dir / "daily_reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    sample = reports_dir / "2026-07-11.md"
+    sample.write_text("GraphQL Resolver を分離した", encoding="utf-8")
+    nested = reports_dir / "notes" / "20260710-worklog.txt"
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_text("Slack Connector を追加した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+
+    adapter = main.DailyReportSourceAdapter(reports_dir)
+    sources = adapter.discover()
+
+    assert len(sources) == 2
+    assert all(source.source_type == "daily_report" for source in sources)
+    assert all(source.metadata["kind"] in {"freestyle_report", "worklog"} for source in sources)
+    assert sources[0].id == "daily_report:2026-07-11.md"
+    assert sources[0].content == "GraphQL Resolver を分離した"
+    assert sources[0].metadata["relative_path"] == "2026-07-11.md"
+    assert sources[0].metadata["format"] == "markdown"
+    assert sources[1].id == "daily_report:notes/20260710-worklog.txt"
+    assert sources[1].metadata["format"] == "text"
+
+
+def test_daily_report_source_adapter_fetches_source_by_id(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    reports_dir = data_dir / "daily_reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    sample = reports_dir / "2026-07-11.md"
+    sample.write_text("PR レビューを実施", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+
+    adapter = main.DailyReportSourceAdapter(reports_dir)
+    source = adapter.fetch("daily_report:2026-07-11.md")
+
+    assert source.content == "PR レビューを実施"
+    with pytest.raises(main.SourceNotFoundError):
+        adapter.fetch("daily_report:missing.md")
+
+
+def test_daily_report_detects_date_from_filename() -> None:
+    assert main.detect_daily_report_date(
+        Path("2026-07-11.md"),
+        "",
+        "",
+        {},
+    ) == "2026-07-11"
+    assert main.detect_daily_report_date(
+        Path("20260711-worklog.txt"),
+        "",
+        "",
+        {},
+    ) == "2026-07-11"
+    assert main.detect_daily_report_date(
+        Path("2026_07_11_note.md"),
+        "",
+        "",
+        {},
+    ) == "2026-07-11"
+
+
+def test_daily_report_detects_date_from_frontmatter() -> None:
+    assert main.detect_daily_report_date(
+        Path("free-note.md"),
+        "---\ndate: 2026-07-11\n---\nbody",
+        "body",
+        {"date": "2026-07-11"},
+    ) == "2026-07-11"
+
+
+def test_daily_report_single_file_and_bulk_import_use_same_source_id(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    reports_dir = data_dir / "daily_reports"
+    report = reports_dir / "notes" / "20260710-worklog.txt"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("Slack Connector を追加した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+
+    single_source = main.inspect_daily_report_file(report)
+    bulk_source = main.DailyReportSourceAdapter(reports_dir).discover()[0]
+
+    assert single_source.id == "daily_report:notes/20260710-worklog.txt"
+    assert bulk_source.id == "daily_report:notes/20260710-worklog.txt"
+    assert single_source.id == bulk_source.id
+
+
+def test_daily_report_file_outside_default_dir_uses_parent_as_root(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    reports_dir = data_dir / "daily_reports"
+    external_dir = tmp_path / "external"
+    report = external_dir / "external-note.md"
+    external_dir.mkdir(parents=True, exist_ok=True)
+    report.write_text("GraphQL Resolver を分離した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+
+    source = main.inspect_daily_report_file(report)
+
+    assert source.id == "daily_report:external-note.md"
+
+
 def test_source_adapter_registry_lists_file_adapter(monkeypatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "app" / "data"
     raw_dir = data_dir / "raw_sources"
+    reports_dir = data_dir / "daily_reports"
     raw_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir.mkdir(parents=True, exist_ok=True)
     (raw_dir / "sample.txt").write_text("sample", encoding="utf-8")
+    (reports_dir / "2026-07-11.md").write_text("sample", encoding="utf-8")
 
     monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
 
     registry = main.build_source_adapter_registry()
 
     assert "file" in registry.list()
+    assert "daily_report" in registry.list()
     assert "github" in registry.list()
     assert "slack" in registry.list()
     assert "teams" in registry.list()
     result = runner.invoke(main.app, ["list-source-adapters"])
     assert result.exit_code == 0
-    assert result.stdout.strip().splitlines() == ["file", "github", "slack", "teams"]
+    assert result.stdout.strip().splitlines() == ["daily_report", "file", "github", "slack", "teams"]
 
 
 def test_inspect_source_adapter_lists_discovered_sources(monkeypatch, tmp_path: Path) -> None:
@@ -515,6 +629,49 @@ def test_inspect_source_adapter_lists_discovered_sources(monkeypatch, tmp_path: 
     assert "id: 2026-07-09_sample.txt" in result.stdout
     assert f"origin: {sample.resolve()}" in result.stdout
     assert "title: 2026-07-09_sample.txt" in result.stdout
+
+
+def test_inspect_daily_report_cli(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    sample = reports_dir / "2026-07-11.md"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    sample.write_text("# 2026-07-11\n\nGraphQL Resolver を分離した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+
+    result = runner.invoke(main.app, ["inspect-daily-report", "--file", str(sample)])
+
+    assert result.exit_code == 0
+    assert "adapter: daily_report" in result.stdout
+    assert "id: daily_report:2026-07-11.md" in result.stdout
+    assert "title: Daily Report 2026-07-11" in result.stdout
+    assert "detected_date: 2026-07-11" in result.stdout
+    assert "GraphQL Resolver" not in result.stdout
+
+
+def test_inspect_daily_reports_cli(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "2026-07-11.md").write_text("GraphQL Resolver を分離した", encoding="utf-8")
+    (reports_dir / "free-note.txt").write_text("Slack Connector を追加した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+
+    result = runner.invoke(main.app, ["inspect-daily-reports", "--dir", str(reports_dir), "--limit", "20"])
+
+    assert result.exit_code == 0
+    assert "adapter: daily_report" in result.stdout
+    assert "discovered_sources: 2" in result.stdout
+    assert "daily_report:2026-07-11.md" in result.stdout
+    assert "GraphQL Resolver" not in result.stdout
 
 
 def test_normalize_sources_still_works_with_file_adapter(monkeypatch, tmp_path: Path) -> None:
@@ -1543,6 +1700,198 @@ def test_teams_connector_does_not_duplicate_same_message(monkeypatch, tmp_path: 
     assert "## Event 2" not in content
 
 
+def test_daily_report_import_does_not_persist_raw_text(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    report = reports_dir / "2026-07-11.md"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    report.write_text(
+        "\n".join(
+            [
+                "# 2026-07-11",
+                "",
+                "今日は眠い",
+                "DAILY_SENTINEL GraphQL Resolver を分離した",
+                "Slack Connector を追加した",
+                "PRで設計指摘を受けた",
+                "昼はラーメン",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_path = main.normalize_daily_report_file(report)
+    content = output_path.read_text(encoding="utf-8")
+
+    assert "DAILY_SENTINEL" not in content
+    assert "GraphQL Resolver分離を実施" in content
+    assert "Slack Connector関連の実装・調査を実施" in content
+    assert "PRレビューで設計指摘を受領" in content
+    assert "今日は眠い" not in content
+    assert "ラーメン" not in content
+
+
+def test_daily_report_import_does_not_overwrite_existing_source_sync(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    source_sync_dir.mkdir(parents=True, exist_ok=True)
+    report = reports_dir / "2026-07-11.md"
+    report.write_text("GraphQL Resolver を分離した", encoding="utf-8")
+    (source_sync_dir / "2026-07-11.md").write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-07-11",
+                "",
+                "## Event 1",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-07-11",
+                "  source_id: github:repo:pr:1",
+                "  source_type: github",
+                "  category: implementation",
+                "  summary: 既存 GitHub event",
+                "  actions:",
+                "  - 既存 GitHub event",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - none",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: medium",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: pr.txt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_path = main.normalize_daily_report_file(report)
+    content = output_path.read_text(encoding="utf-8")
+
+    assert "既存 GitHub event" in content
+    assert "source_id: daily_report:2026-07-11.md" in content
+    assert content.count("## Event 1") == 1
+    assert content.count("## Event 2") == 1
+    assert "## Event 1\n\n## Event" not in content
+
+
+def test_daily_report_import_does_not_duplicate_same_report(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    report = reports_dir / "2026-07-11.md"
+    report.write_text("GraphQL Resolver を分離した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    main.normalize_daily_report_file(report)
+    output_path = main.normalize_daily_report_file(report)
+    content = output_path.read_text(encoding="utf-8")
+
+    assert content.count("source_id: daily_report:2026-07-11.md") == 1
+    assert content.count("## Event 1") == 1
+    assert "## Event 2" not in content
+
+
+def test_daily_report_single_then_bulk_import_does_not_duplicate(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    report = reports_dir / "notes" / "20260710-worklog.txt"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("Slack Connector を追加した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    main.normalize_daily_report_file(report)
+    output_path = main.normalize_daily_reports_dir(reports_dir, limit=20)[0]
+    content = output_path.read_text(encoding="utf-8")
+
+    assert content.count("source_id: daily_report:notes/20260710-worklog.txt") == 1
+    assert content.count("## Event 1") == 1
+    assert "## Event 2" not in content
+
+
+def test_daily_report_free_style_noise_filtering(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    reports_dir = data_dir / "daily_reports"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    report = reports_dir / "2026-07-11.txt"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    report.write_text(
+        "\n".join(
+            [
+                "今日は眠い",
+                "コーヒー飲んだ",
+                "GraphQL Resolver を分離した",
+                "Slack Connector を追加した",
+                "昼はラーメン",
+                "PRで設計指摘を受けた",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_path = main.normalize_daily_report_file(report)
+    content = output_path.read_text(encoding="utf-8")
+
+    assert "GraphQL Resolver分離を実施" in content
+    assert "Slack Connector関連の実装・調査を実施" in content
+    assert "PRレビューで設計指摘を受領" in content
+    assert "今日は眠い" not in content
+    assert "コーヒー" not in content
+    assert "ラーメン" not in content
+
+
 def test_teams_connector_handles_api_failure(monkeypatch) -> None:
     monkeypatch.setenv("MS_GRAPH_TOKEN", "eyJ.super.secret.token")
     fixtures = {
@@ -1574,13 +1923,16 @@ def test_existing_source_adapter_cli_still_works(monkeypatch, tmp_path: Path) ->
     app_root = tmp_path / "app"
     data_dir = app_root / "data"
     raw_dir = data_dir / "raw_sources"
+    reports_dir = data_dir / "daily_reports"
     source_sync_dir = data_dir / "source_sync"
     reviews_dir = app_root / "reviews" / "guard"
     raw_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir.mkdir(parents=True, exist_ok=True)
     (raw_dir / "2026-07-09_daily.txt").write_text("GraphQL Resolver の分離を実施", encoding="utf-8")
 
     monkeypatch.setattr(main, "ROOT", app_root)
     monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
     monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
     monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
 
@@ -1589,6 +1941,7 @@ def test_existing_source_adapter_cli_still_works(monkeypatch, tmp_path: Path) ->
     normalize_result = runner.invoke(main.app, ["normalize-sources"])
 
     assert list_result.exit_code == 0
+    assert "daily_report" in list_result.stdout
     assert "file" in list_result.stdout
     assert "github" in list_result.stdout
     assert "slack" in list_result.stdout
