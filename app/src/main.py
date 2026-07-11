@@ -9,7 +9,8 @@ from functools import lru_cache
 from pathlib import Path
 import re
 import shutil
-from typing import Any, Protocol
+import subprocess
+from typing import Any, Callable, Protocol
 
 import typer
 import yaml
@@ -85,6 +86,18 @@ class RawSource:
     metadata: dict[str, Any]
 
 
+class SourceAdapterError(Exception):
+    pass
+
+
+class SourceNotFoundError(SourceAdapterError):
+    pass
+
+
+class SourceAccessError(SourceAdapterError):
+    pass
+
+
 class SourceAdapter(Protocol):
     name: str
 
@@ -109,7 +122,7 @@ class FileSourceAdapter:
         for source in self.discover():
             if source.id == source_id:
                 return source
-        raise typer.BadParameter(f"Unknown source id for adapter '{self.name}': {source_id}")
+        raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
 
     def _build_raw_source(self, path: Path) -> RawSource:
         resolved = path.resolve()
@@ -126,6 +139,244 @@ class FileSourceAdapter:
                 "size_bytes": stat.st_size,
             },
         )
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    stdout: str
+    stderr: str
+    returncode: int
+
+
+CommandRunner = Callable[[list[str]], CommandResult]
+
+
+def run_command(command: list[str]) -> CommandResult:
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    return CommandResult(
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+        returncode=completed.returncode,
+    )
+
+
+class UnconfiguredSourceAdapter:
+    def __init__(self, name: str, message: str) -> None:
+        self.name = name
+        self.message = message
+
+    def discover(self) -> list[RawSource]:
+        raise SourceAccessError(self.message)
+
+    def fetch(self, source_id: str) -> RawSource:
+        raise SourceAccessError(self.message)
+
+
+class GitHubSourceAdapter:
+    name = "github"
+
+    def __init__(self, repo: str, limit: int = 20, command_runner: CommandRunner | None = None) -> None:
+        self.repo = repo
+        self.limit = limit
+        self.command_runner = command_runner or run_command
+
+    def discover(self) -> list[RawSource]:
+        payload = self._run_gh(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                self.repo,
+                "--state",
+                "all",
+                "--limit",
+                str(self.limit),
+                "--json",
+                "number,title,body,state,author,createdAt,updatedAt,url,labels",
+            ]
+        )
+        if not isinstance(payload, list):
+            raise SourceAccessError("Failed to parse GitHub pull request list.")
+        return [self._build_raw_source(pr) for pr in payload if isinstance(pr, dict)]
+
+    def fetch(self, source_id: str) -> RawSource:
+        pr_number = self._parse_source_id(source_id)
+        payload = self._run_gh(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(pr_number),
+                "--repo",
+                self.repo,
+                "--json",
+                "number,title,body,state,author,createdAt,updatedAt,url,labels,files",
+            ],
+            missing_error=SourceNotFoundError(f"Pull request not found: {source_id}"),
+        )
+        if not isinstance(payload, dict):
+            raise SourceAccessError(f"Failed to parse GitHub pull request detail for {source_id}.")
+        return self._build_raw_source(payload)
+
+    def _run_gh(
+        self,
+        command: list[str],
+        *,
+        missing_error: SourceAdapterError | None = None,
+    ) -> Any:
+        try:
+            result = self.command_runner(command)
+        except FileNotFoundError as exc:
+            raise SourceAccessError("GitHub CLI 'gh' is not installed or not available on PATH.") from exc
+
+        if result.returncode != 0:
+            stderr = sanitize_command_error(result.stderr)
+            lowered = stderr.lower()
+            if missing_error is not None and ("not found" in lowered or "could not resolve to a pull request" in lowered):
+                raise missing_error
+            if "not logged into any hosts" in lowered or "authentication failed" in lowered:
+                raise SourceAccessError("GitHub CLI is not authenticated. Run 'gh auth login' and try again.")
+            if "could not resolve to a repository" in lowered or "repository not found" in lowered:
+                raise SourceAccessError(f"GitHub repository is not accessible: {self.repo}")
+            if stderr:
+                raise SourceAccessError(f"GitHub CLI command failed: {stderr}")
+            raise SourceAccessError("GitHub CLI command failed.")
+
+        try:
+            return json.loads(result.stdout or "null")
+        except json.JSONDecodeError as exc:
+            raise SourceAccessError("Failed to parse JSON output from GitHub CLI.") from exc
+
+    def _parse_source_id(self, source_id: str) -> int:
+        prefix = f"github:{self.repo}:pr:"
+        if not source_id.startswith(prefix):
+            raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+        number_text = source_id.removeprefix(prefix)
+        if not number_text.isdigit():
+            raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+        return int(number_text)
+
+    def _build_raw_source(self, payload: dict[str, Any]) -> RawSource:
+        number = int(payload.get("number", 0))
+        title = str(payload.get("title", "")).strip()
+        body = str(payload.get("body") or "").strip()
+        state = str(payload.get("state", "unknown")).lower()
+        url = str(payload.get("url", "")).strip()
+        created_at = str(payload.get("createdAt", "")).strip()
+        updated_at = str(payload.get("updatedAt", "")).strip()
+        author = self._extract_author(payload.get("author"))
+        labels = self._extract_labels(payload.get("labels"))
+        changed_files = self._extract_changed_files(payload.get("files"))
+        pr_title = f"PR #{number} {title}".strip()
+
+        metadata: dict[str, Any] = {
+            "repo": self.repo,
+            "kind": "pull_request",
+            "number": number,
+            "state": state,
+            "url": url,
+            "author": author,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "labels": labels,
+            "source_reference": f"github:{self.repo}#{number}",
+        }
+        if changed_files:
+            metadata["changed_files"] = changed_files
+
+        return RawSource(
+            id=f"github:{self.repo}:pr:{number}",
+            source_type="github",
+            origin=f"github:{self.repo}#{number}",
+            title=pr_title,
+            content=self._build_content(
+                title=pr_title,
+                body=body,
+                state=state,
+                author=author,
+                created_at=created_at,
+                updated_at=updated_at,
+                url=url,
+                labels=labels,
+                changed_files=changed_files,
+            ),
+            captured_at=updated_at or datetime.now().isoformat(timespec="seconds"),
+            metadata=metadata,
+        )
+
+    def _build_content(
+        self,
+        *,
+        title: str,
+        body: str,
+        state: str,
+        author: str,
+        created_at: str,
+        updated_at: str,
+        url: str,
+        labels: list[str],
+        changed_files: list[str],
+    ) -> str:
+        lines = [
+            title,
+            f"Repository: {self.repo}",
+            f"State: {state}",
+            f"Author: {author or 'unknown'}",
+            f"Created At: {created_at or 'unknown'}",
+            f"Updated At: {updated_at or 'unknown'}",
+            f"Labels: {', '.join(labels) if labels else 'none'}",
+            f"URL: {url or 'unknown'}",
+            "Body:",
+            body or "(empty)",
+        ]
+        if changed_files:
+            lines.append("Changed Files:")
+            lines.extend(f"- {item}" for item in changed_files)
+        return "\n".join(lines)
+
+    def _extract_author(self, author: Any) -> str:
+        if isinstance(author, dict):
+            login = author.get("login")
+            if isinstance(login, str) and login.strip():
+                return login.strip()
+            name = author.get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+        if isinstance(author, str):
+            return author.strip()
+        return ""
+
+    def _extract_labels(self, labels: Any) -> list[str]:
+        if not isinstance(labels, list):
+            return []
+        result: list[str] = []
+        for item in labels:
+            if isinstance(item, dict):
+                name = item.get("name")
+                if isinstance(name, str) and name.strip():
+                    result.append(name.strip())
+            elif isinstance(item, str) and item.strip():
+                result.append(item.strip())
+        return result
+
+    def _extract_changed_files(self, files: Any) -> list[str]:
+        if not isinstance(files, list):
+            return []
+        result: list[str] = []
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            if not path:
+                continue
+            additions = item.get("additions")
+            deletions = item.get("deletions")
+            if isinstance(additions, int) and isinstance(deletions, int):
+                result.append(f"{path} (+{additions} -{deletions})")
+            else:
+                result.append(path)
+        return result
 
 
 class SourceAdapterRegistry:
@@ -227,6 +478,14 @@ def redact_sensitive_text(message: str) -> tuple[str, list[dict[str, str]]]:
         redacted = pattern.sub(replace_match, redacted)
 
     return redacted, findings
+
+
+def sanitize_command_error(message: str) -> str:
+    sanitized = re.sub(r"\b[A-Z][A-Z0-9_]*=[^\s]+", "[REDACTED_ENV]", message)
+    sanitized = re.sub(r"\bgh[pousr]_[A-Za-z0-9_]+\b", "[REDACTED_GITHUB_TOKEN]", sanitized)
+    sanitized = re.sub(r"\bgithub_pat_[A-Za-z0-9_]+\b", "[REDACTED_GITHUB_TOKEN]", sanitized)
+    sanitized, _ = redact_sensitive_text(sanitized)
+    return sanitized.strip()
 
 
 def build_guard_report(
@@ -736,9 +995,18 @@ def resolve_input_path(path_text: str) -> Path:
     raise typer.BadParameter(f"Missing file: {path_text}")
 
 
-def build_source_adapter_registry() -> SourceAdapterRegistry:
+def build_source_adapter_registry(github_repo: str | None = None) -> SourceAdapterRegistry:
     registry = SourceAdapterRegistry()
     registry.register(FileSourceAdapter(DATA_DIR / "raw_sources"))
+    if github_repo:
+        registry.register(GitHubSourceAdapter(repo=github_repo))
+    else:
+        registry.register(
+            UnconfiguredSourceAdapter(
+                "github",
+                "GitHub adapter requires a repository. Use inspect-github-source or normalize-github-source with --repo.",
+            )
+        )
     return registry
 
 
@@ -1339,11 +1607,12 @@ def detect_source_type(path: Path, text: str) -> str:
     return str(load_evidence_rules().get("default_source_type", "text_note"))
 
 
-def extract_source_date(path: Path, text: str) -> str:
+def extract_source_date(path: Path, text: str, fallback: str = "") -> str:
     candidates = [
         path.stem,
         path.name,
         text.splitlines()[0] if text.splitlines() else "",
+        fallback,
     ]
     for candidate in candidates:
         match = re.search(r"(20\d{2})[-_/](\d{2})[-_/](\d{2})", candidate)
@@ -1352,7 +1621,9 @@ def extract_source_date(path: Path, text: str) -> str:
         compact = re.search(r"(20\d{2})(\d{2})(\d{2})", candidate)
         if compact:
             return f"{compact.group(1)}-{compact.group(2)}-{compact.group(3)}"
-    return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d")
+    if path.exists():
+        return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d")
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 def split_source_lines(text: str) -> list[str]:
@@ -1565,6 +1836,9 @@ def build_source_reference_path(raw_source: RawSource) -> Path:
     origin_path = Path(raw_source.origin)
     if origin_path.exists():
         return origin_path
+    source_reference = raw_source.metadata.get("source_reference")
+    if isinstance(source_reference, str) and source_reference.strip():
+        return Path(source_reference.strip())
     metadata_path = raw_source.metadata.get("path")
     if isinstance(metadata_path, str):
         return Path(metadata_path)
@@ -1575,7 +1849,7 @@ def build_canonical_event_from_raw_source(raw_source: RawSource) -> dict[str, An
     source_path = build_source_reference_path(raw_source)
     raw_text = raw_source.content
     redacted_text, findings = redact_sensitive_text(raw_text)
-    date_text = extract_source_date(source_path, redacted_text)
+    date_text = extract_source_date(source_path, redacted_text, fallback=raw_source.captured_at)
     source_type = raw_source.source_type or detect_source_type(source_path, redacted_text)
     lines = split_source_lines(redacted_text)
 
@@ -1627,7 +1901,12 @@ def build_canonical_event_from_raw_source(raw_source: RawSource) -> dict[str, An
         default=("communication", 0),
     )[0]
     summary = actions[0] if actions else "作業上有意な技術イベントを抽出できなかった"
-    evidence_basis = " / ".join(kept_lines[:3]) if kept_lines else "有意な技術イベントなし"
+    if raw_source.source_type == "github":
+        evidence_basis = " / ".join(dedupe_preserving_order(actions[:3] + decisions[:2] + improvements[:2]))
+    else:
+        evidence_basis = " / ".join(kept_lines[:3]) if kept_lines else "有意な技術イベントなし"
+    if not evidence_basis:
+        evidence_basis = "有意な技術イベントなし"
     evidence_excerpt = summarize_line(evidence_basis)[:200]
 
     return {
@@ -1680,6 +1959,31 @@ def build_canonical_event(source_path: Path) -> dict[str, Any]:
         },
     )
     return build_canonical_event_from_raw_source(raw_source)
+
+
+def normalize_raw_sources(
+    raw_sources: list[RawSource],
+    *,
+    action_label: str,
+) -> list[Path]:
+    grouped_events: dict[str, list[dict[str, Any]]] = {}
+
+    for raw_source in raw_sources:
+        event = build_canonical_event_from_raw_source(raw_source)
+        grouped_events.setdefault(event["date"], []).append(event)
+        maybe_write_guard_report(
+            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            report_date=event["date"],
+            event_path=SOURCE_SYNC_DIR / f"{event['date']}.md",
+            findings=event["_guard_findings"],
+            redacted_message="\n".join(item["detail"] for item in event["evidence"] if item["kind"] == "redacted_excerpt"),
+            action_label=action_label,
+        )
+
+    output_paths: list[Path] = []
+    for target_date, events in sorted(grouped_events.items()):
+        output_paths.append(write_source_sync_file(target_date, events))
+    return output_paths
 
 
 def format_canonical_event(event: dict[str, Any]) -> str:
@@ -1756,25 +2060,13 @@ def normalize_source_file(file_path: str | Path) -> Path:
 
 
 def normalize_all_sources() -> list[Path]:
-    grouped_events: dict[str, list[dict[str, Any]]] = {}
     adapter = build_source_adapter_registry().get("file")
+    return normalize_raw_sources(adapter.discover(), action_label="normalize-sources")
 
-    for raw_source in adapter.discover():
-        event = build_canonical_event_from_raw_source(raw_source)
-        grouped_events.setdefault(event["date"], []).append(event)
-        maybe_write_guard_report(
-            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            report_date=event["date"],
-            event_path=SOURCE_SYNC_DIR / f"{event['date']}.md",
-            findings=event["_guard_findings"],
-            redacted_message="\n".join(item["detail"] for item in event["evidence"] if item["kind"] == "redacted_excerpt"),
-            action_label="normalize-sources",
-        )
 
-    output_paths: list[Path] = []
-    for target_date, events in sorted(grouped_events.items()):
-        output_paths.append(write_source_sync_file(target_date, events))
-    return output_paths
+def normalize_github_sources(repo: str, limit: int = 20, command_runner: CommandRunner | None = None) -> list[Path]:
+    adapter = GitHubSourceAdapter(repo=repo, limit=limit, command_runner=command_runner)
+    return normalize_raw_sources(adapter.discover(), action_label="normalize-github-source")
 
 
 def issue_resume(title: str, note: str, theme: str = "forest") -> Path:
@@ -1874,6 +2166,48 @@ def normalize_sources() -> None:
         typer.echo(f"- {path.relative_to(ROOT)}")
 
 
+@app.command("inspect-github-source")
+def inspect_github_source(
+    repo: str = typer.Option(..., "--repo", help="GitHub repository in owner/name format"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of pull requests to inspect"),
+) -> None:
+    """Inspect GitHub pull requests as raw sources."""
+    adapter = GitHubSourceAdapter(repo=repo, limit=limit)
+    try:
+        sources = adapter.discover()
+    except SourceAdapterError as exc:
+        typer.echo(f"GitHub source inspection failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"adapter: {adapter.name}")
+    typer.echo(f"repo: {repo}")
+    typer.echo(f"discovered_sources: {len(sources)}")
+    for source in sources:
+        typer.echo(f"- id: {source.id}")
+        typer.echo(f"  title: {source.title}")
+        typer.echo(f"  origin: {source.origin}")
+
+
+@app.command("normalize-github-source")
+def normalize_github_source(
+    repo: str = typer.Option(..., "--repo", help="GitHub repository in owner/name format"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of pull requests to normalize"),
+) -> None:
+    """Normalize GitHub pull requests into canonical event markdown files."""
+    try:
+        output_paths = normalize_github_sources(repo=repo, limit=limit)
+    except SourceAdapterError as exc:
+        typer.echo(f"GitHub source normalization failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not output_paths:
+        typer.echo("No GitHub pull requests found.")
+        return
+    typer.echo(f"Normalized {len(output_paths)} day files from GitHub")
+    for path in output_paths:
+        typer.echo(f"- {path.relative_to(ROOT)}")
+
+
 @app.command("list-source-adapters")
 def list_source_adapters() -> None:
     """List registered source adapters."""
@@ -1888,7 +2222,11 @@ def inspect_source_adapter(
 ) -> None:
     """Inspect a registered source adapter and its discovered sources."""
     source_adapter = build_source_adapter_registry().get(adapter)
-    sources = source_adapter.discover()
+    try:
+        sources = source_adapter.discover()
+    except SourceAdapterError as exc:
+        typer.echo(f"Source adapter inspection failed: {exc}", err=True)
+        raise typer.Exit(1)
 
     typer.echo(f"adapter: {source_adapter.name}")
     typer.echo(f"discovered_sources: {len(sources)}")
