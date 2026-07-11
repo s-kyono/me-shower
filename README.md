@@ -85,6 +85,13 @@ uv run me-shower inspect-daily-reports --dir app/data/daily_reports --limit 20
 # Daily Report を一括 import
 uv run me-shower import-daily-reports --dir app/data/daily_reports --limit 20
 
+# Source Timeline を生成
+uv run me-shower build-source-timeline
+
+# Source Timeline を確認
+uv run me-shower inspect-source-timeline --limit 20
+uv run me-shower inspect-source-timeline --from 2026-07-01 --to 2026-07-31 --min-confidence medium
+
 # Slack source を inspect
 uv run me-shower inspect-slack-source --channel C0123456789 --limit 20 --token-env SLACK_BOT_TOKEN
 
@@ -150,6 +157,23 @@ uv run me-shower normalize-sources
 `app/data/raw_sources/*.txt` をまとめて正規化し、日付ごとの `app/data/source_sync/YYYY-MM-DD.md` を生成します。Learning Loop はこの `source_sync` を入力として利用します。resume 向けの選別や言い換えはここでは行わず、`generate-md` / `issue` の Resume Agent Hook で扱う前提です。
 
 Source Confidence は、Canonical Event の evidence quality を `high` / `medium` / `low` で表します。これは成果の価値判断ではなく、source / metadata / extraction quality / noise の強さを表す運用指標です。
+
+### `uv run me-shower build-source-timeline`
+
+```bash
+uv run me-shower build-source-timeline
+```
+
+Source Timeline は `source_sync` から生成される derived view です。Canonical Event を日付順に見渡すための index であり、source of truth ではありません。
+
+### `uv run me-shower inspect-source-timeline`
+
+```bash
+uv run me-shower inspect-source-timeline --limit 20
+uv run me-shower inspect-source-timeline --from 2026-07-01 --to 2026-07-31 --min-confidence medium
+```
+
+Timeline item を CLI で確認します。`--from` / `--to` / `--source-type` / `--min-confidence` / `--limit` で絞り込みできます。raw source text は表示しません。
 
 ### `uv run me-shower inspect-daily-report`
 
