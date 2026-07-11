@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
 import re
 import shutil
-from typing import Any
+from typing import Any, Protocol
 
 import typer
 import yaml
@@ -71,6 +72,77 @@ REDACTION_RULES = [
     ("EMPLOYEE_NAME", re.compile(r"\b社員名\b"), "[REDACTED_EMPLOYEE_NAME]"),
     ("PROJECT_NAME", re.compile(r"\b案件名\b"), "[REDACTED_PROJECT_NAME]"),
 ]
+
+
+@dataclass(frozen=True)
+class RawSource:
+    id: str
+    source_type: str
+    origin: str
+    title: str
+    content: str
+    captured_at: str
+    metadata: dict[str, Any]
+
+
+class SourceAdapter(Protocol):
+    name: str
+
+    def discover(self) -> list[RawSource]:
+        ...
+
+    def fetch(self, source_id: str) -> RawSource:
+        ...
+
+
+class FileSourceAdapter:
+    name = "file"
+
+    def __init__(self, raw_dir: Path) -> None:
+        self.raw_dir = raw_dir
+
+    def discover(self) -> list[RawSource]:
+        self.raw_dir.mkdir(parents=True, exist_ok=True)
+        return [self._build_raw_source(path) for path in sorted(self.raw_dir.glob("*.txt"))]
+
+    def fetch(self, source_id: str) -> RawSource:
+        for source in self.discover():
+            if source.id == source_id:
+                return source
+        raise typer.BadParameter(f"Unknown source id for adapter '{self.name}': {source_id}")
+
+    def _build_raw_source(self, path: Path) -> RawSource:
+        resolved = path.resolve()
+        stat = resolved.stat()
+        return RawSource(
+            id=resolved.name,
+            source_type="file",
+            origin=str(resolved),
+            title=resolved.name,
+            content=resolved.read_text(encoding="utf-8"),
+            captured_at=datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            metadata={
+                "path": str(resolved),
+                "size_bytes": stat.st_size,
+            },
+        )
+
+
+class SourceAdapterRegistry:
+    def __init__(self) -> None:
+        self._adapters: dict[str, SourceAdapter] = {}
+
+    def register(self, adapter: SourceAdapter) -> None:
+        self._adapters[adapter.name] = adapter
+
+    def get(self, name: str) -> SourceAdapter:
+        adapter = self._adapters.get(name)
+        if adapter is None:
+            raise typer.BadParameter(f"Unknown source adapter: {name}")
+        return adapter
+
+    def list(self) -> list[str]:
+        return sorted(self._adapters)
 
 
 def read_yaml(path: Path) -> Any:
@@ -662,6 +734,12 @@ def resolve_input_path(path_text: str) -> Path:
         if path.exists():
             return path.resolve()
     raise typer.BadParameter(f"Missing file: {path_text}")
+
+
+def build_source_adapter_registry() -> SourceAdapterRegistry:
+    registry = SourceAdapterRegistry()
+    registry.register(FileSourceAdapter(DATA_DIR / "raw_sources"))
+    return registry
 
 
 def extract_target_from_proposal(proposal_text: str) -> str:
@@ -1483,11 +1561,22 @@ def estimate_confidence(*, actions: list[str], tags: list[str], decisions: list[
     return "low"
 
 
-def build_canonical_event(source_path: Path) -> dict[str, Any]:
-    raw_text = source_path.read_text(encoding="utf-8")
+def build_source_reference_path(raw_source: RawSource) -> Path:
+    origin_path = Path(raw_source.origin)
+    if origin_path.exists():
+        return origin_path
+    metadata_path = raw_source.metadata.get("path")
+    if isinstance(metadata_path, str):
+        return Path(metadata_path)
+    return Path(raw_source.title or raw_source.id)
+
+
+def build_canonical_event_from_raw_source(raw_source: RawSource) -> dict[str, Any]:
+    source_path = build_source_reference_path(raw_source)
+    raw_text = raw_source.content
     redacted_text, findings = redact_sensitive_text(raw_text)
     date_text = extract_source_date(source_path, redacted_text)
-    source_type = detect_source_type(source_path, redacted_text)
+    source_type = raw_source.source_type or detect_source_type(source_path, redacted_text)
     lines = split_source_lines(redacted_text)
 
     kept_lines: list[str] = []
@@ -1571,7 +1660,26 @@ def build_canonical_event(source_path: Path) -> dict[str, Any]:
         ],
         "_guard_findings": findings,
         "_source_path": source_path,
+        "_raw_source": raw_source,
     }
+
+
+def build_canonical_event(source_path: Path) -> dict[str, Any]:
+    resolved = source_path.resolve()
+    stat = resolved.stat()
+    raw_source = RawSource(
+        id=resolved.name,
+        source_type="file",
+        origin=str(resolved),
+        title=resolved.name,
+        content=resolved.read_text(encoding="utf-8"),
+        captured_at=datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        metadata={
+            "path": str(resolved),
+            "size_bytes": stat.st_size,
+        },
+    )
+    return build_canonical_event_from_raw_source(raw_source)
 
 
 def format_canonical_event(event: dict[str, Any]) -> str:
@@ -1648,12 +1756,11 @@ def normalize_source_file(file_path: str | Path) -> Path:
 
 
 def normalize_all_sources() -> list[Path]:
-    raw_dir = DATA_DIR / "raw_sources"
-    raw_dir.mkdir(parents=True, exist_ok=True)
     grouped_events: dict[str, list[dict[str, Any]]] = {}
+    adapter = build_source_adapter_registry().get("file")
 
-    for source_path in sorted(raw_dir.glob("*.txt")):
-        event = build_canonical_event(source_path)
+    for raw_source in adapter.discover():
+        event = build_canonical_event_from_raw_source(raw_source)
         grouped_events.setdefault(event["date"], []).append(event)
         maybe_write_guard_report(
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1765,6 +1872,32 @@ def normalize_sources() -> None:
     typer.echo(f"Normalized {len(output_paths)} day files")
     for path in output_paths:
         typer.echo(f"- {path.relative_to(ROOT)}")
+
+
+@app.command("list-source-adapters")
+def list_source_adapters() -> None:
+    """List registered source adapters."""
+    registry = build_source_adapter_registry()
+    for adapter_name in registry.list():
+        typer.echo(adapter_name)
+
+
+@app.command("inspect-source-adapter")
+def inspect_source_adapter(
+    adapter: str = typer.Option(..., "--adapter", help="Source adapter name"),
+) -> None:
+    """Inspect a registered source adapter and its discovered sources."""
+    source_adapter = build_source_adapter_registry().get(adapter)
+    sources = source_adapter.discover()
+
+    typer.echo(f"adapter: {source_adapter.name}")
+    typer.echo(f"discovered_sources: {len(sources)}")
+    if not sources:
+        return
+    for source in sources:
+        typer.echo(f"- id: {source.id}")
+        typer.echo(f"  title: {source.title}")
+        typer.echo(f"  origin: {source.origin}")
 
 
 @app.command("generate-pdf")

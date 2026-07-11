@@ -4,6 +4,11 @@ import json
 
 import main
 from main import load_resume_data, render_markdown
+import pytest
+from typer.testing import CliRunner
+
+
+runner = CliRunner()
 
 
 def test_load_resume_data_has_projects() -> None:
@@ -402,6 +407,116 @@ def test_normalize_sources_processes_multiple_files(monkeypatch, tmp_path: Path)
     assert source_sync_dir.joinpath("2026-07-09.md").exists()
     assert "GraphQL" in source_sync_dir.joinpath("2026-07-08.md").read_text(encoding="utf-8")
     assert "Claude" in source_sync_dir.joinpath("2026-07-09.md").read_text(encoding="utf-8")
+
+
+def test_file_source_adapter_discovers_raw_sources(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    raw_dir = data_dir / "raw_sources"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    sample = raw_dir / "2026-07-09_sample.txt"
+    sample.write_text("GraphQL Resolver を見直した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+
+    adapter = main.FileSourceAdapter(raw_dir)
+    sources = adapter.discover()
+
+    assert len(sources) == 1
+    source = sources[0]
+    assert source.source_type == "file"
+    assert source.origin == str(sample.resolve())
+    assert source.content == "GraphQL Resolver を見直した"
+    assert source.title == "2026-07-09_sample.txt"
+    assert source.id == "2026-07-09_sample.txt"
+
+
+def test_file_source_adapter_fetches_source_by_id(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    raw_dir = data_dir / "raw_sources"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    sample = raw_dir / "2026-07-09_sample.txt"
+    sample.write_text("PR レビューを実施", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+
+    adapter = main.FileSourceAdapter(raw_dir)
+    source = adapter.fetch("2026-07-09_sample.txt")
+
+    assert source.content == "PR レビューを実施"
+    with pytest.raises(main.typer.BadParameter):
+        adapter.fetch("missing.txt")
+
+
+def test_source_adapter_registry_lists_file_adapter(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    raw_dir = data_dir / "raw_sources"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "sample.txt").write_text("sample", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+
+    registry = main.build_source_adapter_registry()
+
+    assert "file" in registry.list()
+    result = runner.invoke(main.app, ["list-source-adapters"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "file"
+
+
+def test_inspect_source_adapter_lists_discovered_sources(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "app" / "data"
+    raw_dir = data_dir / "raw_sources"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    sample = raw_dir / "2026-07-09_sample.txt"
+    sample.write_text("Resolver 分離を実施", encoding="utf-8")
+
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+
+    result = runner.invoke(main.app, ["inspect-source-adapter", "--adapter", "file"])
+
+    assert result.exit_code == 0
+    assert "adapter: file" in result.stdout
+    assert "discovered_sources: 1" in result.stdout
+    assert "id: 2026-07-09_sample.txt" in result.stdout
+    assert f"origin: {sample.resolve()}" in result.stdout
+    assert "title: 2026-07-09_sample.txt" in result.stdout
+
+
+def test_normalize_sources_still_works_with_file_adapter(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    raw_dir = data_dir / "raw_sources"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "2026-07-09_daily.txt").write_text(
+        "\n".join(
+            [
+                "今日は眠い",
+                "GraphQL Resolver の分離を実施",
+                "Claude でレビュー観点を整理",
+                "昼飯ラーメン",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_paths = main.normalize_all_sources()
+
+    assert len(output_paths) == 1
+    output_path = output_paths[0]
+    assert output_path == source_sync_dir / "2026-07-09.md"
+    content = output_path.read_text(encoding="utf-8")
+    assert "GraphQL Resolver分離を実施" in content
+    assert "noise_removed:" in content
+    assert "fatigue" in content
+    assert "meal" in content
+    assert "low_signal" in content
 
 
 def test_normalize_source_filters_low_signal_noisy_input(monkeypatch, tmp_path: Path) -> None:
