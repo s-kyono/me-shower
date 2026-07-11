@@ -43,6 +43,117 @@ def build_graph_api_caller(fixtures: dict[tuple[str, tuple[tuple[str, object], .
     return caller
 
 
+def write_source_sync_fixture(source_sync_dir: Path) -> None:
+    source_sync_dir.mkdir(parents=True, exist_ok=True)
+    (source_sync_dir / "2026-07-10.md").write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-07-10",
+                "",
+                "## Event 1",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-07-10",
+                "  source_id: daily_report:2026-07-10.md",
+                "  source_type: daily_report",
+                "  category: implementation",
+                "  summary: GraphQL Resolver分離を実施",
+                "  actions:",
+                "  - GraphQL Resolver分離を実施",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - Resolver責務を整理",
+                "  tags:",
+                "  - GraphQL",
+                "  - Resolver",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - low_signal",
+                "  confidence: medium",
+                "  confidence_reasons:",
+                "  - source_type:daily_report",
+                "  - actions:1",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: daily_report:2026-07-10.md",
+                "",
+                "## Event 2",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-07-10",
+                "  source_type: github",
+                "  category: review",
+                "  summary: PRレビューで設計指摘を受領",
+                "  actions:",
+                "  - PRレビューで設計指摘を受領",
+                "  decisions:",
+                "  - リファクタ方針を決定",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - PR",
+                "  tools:",
+                "  - gh",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: high",
+                "  confidence_reasons:",
+                "  - source_type:github",
+                "  - actions:1",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: github:s-kyono/me-shower#3",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (source_sync_dir / "2026-07-11.md").write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-07-11",
+                "",
+                "## Event 1",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-07-11",
+                "  source_id: slack:C0123456789:1781736600.000100",
+                "  source_type: slack",
+                "  category: implementation",
+                "  summary: Slack Connector関連の実装・調査を実施",
+                "  actions:",
+                "  - Slack Connector関連の実装・調査を実施",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - Slack",
+                "  - Connector",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: low",
+                "  confidence_reasons:",
+                "  - source_type:slack",
+                "  - actions:1",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: slack:C0123456789",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_load_resume_data_has_projects() -> None:
     data = load_resume_data()
 
@@ -2103,26 +2214,53 @@ def test_teams_connector_handles_api_failure(monkeypatch) -> None:
     assert "invalid or expired" in message
 
 
-def test_existing_source_adapter_cli_still_works(monkeypatch, tmp_path: Path) -> None:
+def test_existing_cli_still_works(monkeypatch, tmp_path: Path) -> None:
     app_root = tmp_path / "app"
     data_dir = app_root / "data"
     raw_dir = data_dir / "raw_sources"
     reports_dir = data_dir / "daily_reports"
     source_sync_dir = data_dir / "source_sync"
+    generated_dir = app_root / "generated"
     reviews_dir = app_root / "reviews" / "guard"
     raw_dir.mkdir(parents=True, exist_ok=True)
     reports_dir.mkdir(parents=True, exist_ok=True)
     (raw_dir / "2026-07-09_daily.txt").write_text("GraphQL Resolver の分離を実施", encoding="utf-8")
+    write_source_sync_fixture(source_sync_dir)
 
     monkeypatch.setattr(main, "ROOT", app_root)
     monkeypatch.setattr(main, "DATA_DIR", data_dir)
     monkeypatch.setattr(main, "DAILY_REPORTS_DIR", reports_dir)
     monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GENERATED_DIR", generated_dir)
+    monkeypatch.setattr(main, "SOURCE_TIMELINE_PATH", generated_dir / "source_timeline.md")
+    monkeypatch.setattr(main, "SOURCE_TIMELINE_JSONL_PATH", generated_dir / "source_timeline.jsonl")
     monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
 
     list_result = runner.invoke(main.app, ["list-source-adapters"])
     inspect_result = runner.invoke(main.app, ["inspect-source-adapter", "--adapter", "file"])
     normalize_result = runner.invoke(main.app, ["normalize-sources"])
+    timeline_build_result = runner.invoke(
+        main.app,
+        [
+            "build-source-timeline",
+            "--source-sync-dir",
+            str(source_sync_dir),
+            "--output",
+            str(generated_dir / "source_timeline.md"),
+            "--jsonl-output",
+            str(generated_dir / "source_timeline.jsonl"),
+        ],
+    )
+    timeline_inspect_result = runner.invoke(
+        main.app,
+        [
+            "inspect-source-timeline",
+            "--source-sync-dir",
+            str(source_sync_dir),
+            "--limit",
+            "20",
+        ],
+    )
 
     assert list_result.exit_code == 0
     assert "daily_report" in list_result.stdout
@@ -2133,7 +2271,11 @@ def test_existing_source_adapter_cli_still_works(monkeypatch, tmp_path: Path) ->
     assert inspect_result.exit_code == 0
     assert "adapter: file" in inspect_result.stdout
     assert normalize_result.exit_code == 0
+    assert timeline_build_result.exit_code == 0
+    assert timeline_inspect_result.exit_code == 0
     assert source_sync_dir.joinpath("2026-07-09.md").exists()
+    assert generated_dir.joinpath("source_timeline.md").exists()
+    assert "Source Timeline" in timeline_inspect_result.stdout
 
 
 def test_resume_agent_hook_is_design_only() -> None:
@@ -2144,6 +2286,184 @@ def test_resume_agent_hook_is_design_only() -> None:
     assert context["contract"]["normalizer_scope"] == "raw source -> canonical event / evidence"
     assert "generate-md" in context["contract"]["activation_points"]
     assert "issue" in context["contract"]["activation_points"]
+
+
+def test_parse_source_sync_file_extracts_timeline_items(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    source_sync_dir = app_root / "data" / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    items = main.parse_source_sync_file(source_sync_dir / "2026-07-10.md")
+
+    assert len(items) == 2
+    assert items[0].date == "2026-07-10"
+    assert items[0].source_id == "daily_report:2026-07-10.md"
+    assert items[0].source_type == "daily_report"
+    assert items[0].summary == "GraphQL Resolver分離を実施"
+    assert items[0].confidence == "medium"
+    assert items[1].source_id.startswith("unknown:2026-07-10:2")
+
+
+def test_build_source_timeline_outputs_markdown(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    raw_dir = data_dir / "raw_sources"
+    generated_dir = app_root / "generated"
+    write_source_sync_fixture(source_sync_dir)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "sentinel.txt").write_text("RAW_SOURCE_SENTINEL", encoding="utf-8")
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    output_path, _, item_count = main.build_source_timeline(
+        source_sync_dir=source_sync_dir,
+        output_path=generated_dir / "source_timeline.md",
+        jsonl_output_path=None,
+    )
+
+    content = output_path.read_text(encoding="utf-8")
+    assert item_count == 3
+    assert "# Source Timeline" in content
+    assert "GraphQL Resolver分離を実施" in content
+    assert "daily_report:2026-07-10.md" in content
+    assert "### medium · daily_report · implementation" in content
+    assert "RAW_SOURCE_SENTINEL" not in content
+
+
+def test_build_source_timeline_outputs_jsonl(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    source_sync_dir = app_root / "data" / "source_sync"
+    generated_dir = app_root / "generated"
+    write_source_sync_fixture(source_sync_dir)
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    _, jsonl_path, _ = main.build_source_timeline(
+        source_sync_dir=source_sync_dir,
+        output_path=generated_dir / "source_timeline.md",
+        jsonl_output_path=generated_dir / "source_timeline.jsonl",
+    )
+
+    assert jsonl_path is not None
+    lines = [json.loads(line) for line in jsonl_path.read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 3
+    assert all("date" in line for line in lines)
+    assert all("source_id" in line for line in lines)
+    assert all("confidence" in line for line in lines)
+
+
+def test_inspect_source_timeline_filters_by_date_range(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    source_sync_dir = app_root / "data" / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    result = runner.invoke(
+        main.app,
+        [
+            "inspect-source-timeline",
+            "--source-sync-dir",
+            str(source_sync_dir),
+            "--from",
+            "2026-07-10",
+            "--to",
+            "2026-07-10",
+            "--limit",
+            "20",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "2026-07-10" in result.stdout
+    assert "2026-07-11" not in result.stdout
+
+
+def test_inspect_source_timeline_filters_by_source_type(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    source_sync_dir = app_root / "data" / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    result = runner.invoke(
+        main.app,
+        [
+            "inspect-source-timeline",
+            "--source-sync-dir",
+            str(source_sync_dir),
+            "--source-type",
+            "daily_report",
+            "--limit",
+            "20",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "daily_report" in result.stdout
+    assert "slack implementation" not in result.stdout
+    assert "github review" not in result.stdout
+
+
+def test_inspect_source_timeline_filters_by_min_confidence(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    source_sync_dir = app_root / "data" / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    result = runner.invoke(
+        main.app,
+        [
+            "inspect-source-timeline",
+            "--source-sync-dir",
+            str(source_sync_dir),
+            "--min-confidence",
+            "medium",
+            "--limit",
+            "20",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "[high]" in result.stdout
+    assert "[medium]" in result.stdout
+    assert "[low]" not in result.stdout
+
+
+def test_source_timeline_does_not_read_raw_sources(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    raw_dir = data_dir / "raw_sources"
+    generated_dir = app_root / "generated"
+    write_source_sync_fixture(source_sync_dir)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "sentinel.txt").write_text("RAW_SOURCE_SENTINEL", encoding="utf-8")
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    output_path, _, _ = main.build_source_timeline(
+        source_sync_dir=source_sync_dir,
+        output_path=generated_dir / "source_timeline.md",
+        jsonl_output_path=None,
+    )
+
+    assert "RAW_SOURCE_SENTINEL" not in output_path.read_text(encoding="utf-8")
+
+
+def test_source_timeline_does_not_modify_source_sync(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    source_sync_dir = app_root / "data" / "source_sync"
+    generated_dir = app_root / "generated"
+    write_source_sync_fixture(source_sync_dir)
+    before = {path.name: path.read_text(encoding="utf-8") for path in source_sync_dir.glob("*.md")}
+    monkeypatch.setattr(main, "ROOT", app_root)
+
+    main.build_source_timeline(
+        source_sync_dir=source_sync_dir,
+        output_path=generated_dir / "source_timeline.md",
+        jsonl_output_path=generated_dir / "source_timeline.jsonl",
+    )
+
+    after = {path.name: path.read_text(encoding="utf-8") for path in source_sync_dir.glob("*.md")}
+    assert after == before
 
 
 def test_loop_skills_writes_review_files(monkeypatch, tmp_path: Path) -> None:

@@ -32,6 +32,8 @@ DAILY_REPORTS_DIR = DATA_DIR / "daily_reports"
 TEMPLATE_DIR = ROOT / "templates"
 THEMES_DIR = TEMPLATE_DIR / "themes"
 GENERATED_DIR = ROOT / "generated"
+SOURCE_TIMELINE_PATH = GENERATED_DIR / "source_timeline.md"
+SOURCE_TIMELINE_JSONL_PATH = GENERATED_DIR / "source_timeline.jsonl"
 CHANGELOG_PATH = ROOT / "CHANGELOG.md"
 RELEASES_DIR = GENERATED_DIR / "releases"
 CODEX_DIR = REPO_ROOT / ".codex"
@@ -97,6 +99,25 @@ class SourceConfidence:
     level: str
     score: int
     reasons: list[str]
+
+
+@dataclass(frozen=True)
+class SourceTimelineItem:
+    date: str
+    source_id: str
+    source_type: str
+    category: str
+    summary: str
+    actions: list[str]
+    decisions: list[str]
+    improvements: list[str]
+    tags: list[str]
+    tools: list[str]
+    confidence: str
+    confidence_reasons: list[str]
+    evidence_details: list[str]
+    source_sync_path: str
+    event_index: int
 
 
 class SourceAdapterError(Exception):
@@ -1542,6 +1563,13 @@ def resolve_optional_input_path(path_text: str, *, root_candidates: list[Path] |
     return ((root_candidates or [ROOT])[0] / candidate).resolve()
 
 
+def resolve_output_path(path_text: str) -> Path:
+    candidate = Path(path_text).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (ROOT / candidate).resolve()
+
+
 def build_source_adapter_registry(github_repo: str | None = None) -> SourceAdapterRegistry:
     registry = SourceAdapterRegistry()
     registry.register(FileSourceAdapter(DATA_DIR / "raw_sources"))
@@ -2792,6 +2820,263 @@ def format_canonical_event(event: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+
+def parse_source_sync_scalar(block: str, field: str) -> str | None:
+    match = re.search(rf"(?m)^  {re.escape(field)}:\s*(.+?)\s*$", block)
+    if not match:
+        if field in {"schema", "date"}:
+            match = re.search(rf"(?m)^- {re.escape(field)}:\s*(.+?)\s*$", block)
+    if not match:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
+def parse_source_sync_list_field(block: str, field: str) -> list[str]:
+    lines = block.splitlines()
+    prefix = f"  {field}:"
+    items: list[str] = []
+    in_section = False
+    for line in lines:
+        if line == prefix:
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        if re.match(r"^  [a-z_]+:", line):
+            break
+        if line.startswith("  - "):
+            value = line[4:].strip()
+            if value and value.lower() != "none":
+                items.append(value)
+    return items
+
+
+def parse_source_sync_evidence_details(block: str) -> list[str]:
+    lines = block.splitlines()
+    details: list[str] = []
+    in_evidence = False
+    for line in lines:
+        if line == "  evidence:":
+            in_evidence = True
+            continue
+        if not in_evidence:
+            continue
+        if re.match(r"^  [a-z_]+:", line):
+            break
+        if line.startswith("    detail: "):
+            detail = line.removeprefix("    detail: ").strip()
+            if detail and detail.lower() != "none":
+                details.append(detail)
+    return details
+
+
+def parse_source_sync_event_block(block: str, *, path: Path, event_index: int) -> SourceTimelineItem | None:
+    event_date = parse_source_sync_scalar(block, "date") or path.stem
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_date):
+        return None
+    summary = parse_source_sync_scalar(block, "summary")
+    if not summary:
+        return None
+    source_id = parse_source_sync_scalar(block, "source_id") or f"unknown:{path.stem}:{event_index}"
+    source_type = parse_source_sync_scalar(block, "source_type") or source_id.split(":", 1)[0]
+    category = parse_source_sync_scalar(block, "category") or "unknown"
+    confidence = (parse_source_sync_scalar(block, "confidence") or "low").lower()
+    if confidence not in CONFIDENCE_ORDER:
+        confidence = "low"
+    return SourceTimelineItem(
+        date=event_date,
+        source_id=source_id,
+        source_type=source_type,
+        category=category,
+        summary=summary,
+        actions=parse_source_sync_list_field(block, "actions"),
+        decisions=parse_source_sync_list_field(block, "decisions"),
+        improvements=parse_source_sync_list_field(block, "improvements"),
+        tags=parse_source_sync_list_field(block, "tags"),
+        tools=parse_source_sync_list_field(block, "tools"),
+        confidence=confidence,
+        confidence_reasons=parse_source_sync_list_field(block, "confidence_reasons"),
+        evidence_details=parse_source_sync_evidence_details(block),
+        source_sync_path=display_path(path.resolve()),
+        event_index=event_index,
+    )
+
+
+def parse_source_sync_file(path: Path) -> list[SourceTimelineItem]:
+    _, blocks = read_source_sync_event_blocks(path)
+    items: list[SourceTimelineItem] = []
+    for event_index, block in enumerate(blocks, start=1):
+        item = parse_source_sync_event_block(block, path=path, event_index=event_index)
+        if item is not None:
+            items.append(item)
+    return items
+
+
+def source_timeline_sort_key(item: SourceTimelineItem) -> tuple[date, int, str, int]:
+    parsed_date = datetime.strptime(item.date, "%Y-%m-%d").date()
+    return (
+        parsed_date,
+        -CONFIDENCE_ORDER.get(item.confidence, -1),
+        item.source_type,
+        item.event_index,
+    )
+
+
+def read_source_timeline_items(source_sync_dir: Path) -> list[SourceTimelineItem]:
+    if not source_sync_dir.exists():
+        return []
+    items: list[SourceTimelineItem] = []
+    for path in sorted(source_sync_dir.glob("*.md")):
+        items.extend(parse_source_sync_file(path))
+    return sorted(
+        items,
+        key=lambda item: (
+            -source_timeline_sort_key(item)[0].toordinal(),
+            source_timeline_sort_key(item)[1],
+            source_timeline_sort_key(item)[2],
+            source_timeline_sort_key(item)[3],
+        ),
+    )
+
+
+def filter_source_timeline_items(
+    items: list[SourceTimelineItem],
+    *,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    source_type: str | None = None,
+    confidence: str | None = None,
+    min_confidence: str | None = None,
+    limit: int | None = None,
+) -> list[SourceTimelineItem]:
+    filtered: list[SourceTimelineItem] = []
+    min_rank = CONFIDENCE_ORDER.get(min_confidence.lower(), 0) if min_confidence else None
+    exact_confidence = confidence.lower() if confidence else None
+    exact_source_type = source_type.lower() if source_type else None
+    for item in items:
+        if from_date and item.date < from_date:
+            continue
+        if to_date and item.date > to_date:
+            continue
+        if exact_source_type and item.source_type.lower() != exact_source_type:
+            continue
+        if exact_confidence and item.confidence != exact_confidence:
+            continue
+        if min_rank is not None and CONFIDENCE_ORDER.get(item.confidence, -1) < min_rank:
+            continue
+        filtered.append(item)
+        if limit is not None and len(filtered) >= limit:
+            break
+    return filtered
+
+
+def render_source_timeline_markdown(items: list[SourceTimelineItem], *, source_sync_dir: Path) -> str:
+    lines = [
+        "# Source Timeline",
+        "",
+        f"Generated from `{display_path(source_sync_dir.resolve())}`.",
+        "",
+    ]
+    current_date: str | None = None
+    for item in items:
+        if item.date != current_date:
+            if current_date is not None:
+                lines.append("")
+            current_date = item.date
+            lines.extend([f"## {item.date}", ""])
+        lines.append(f"### {item.confidence} · {item.source_type} · {item.category}")
+        lines.append("")
+        lines.append(f"**{item.summary}**")
+        lines.append("")
+        lines.append(f"- source_id: `{item.source_id}`")
+        lines.append(f"- source_sync: `{item.source_sync_path}` (Event {item.event_index})")
+        lines.append("- actions:")
+        lines.extend([f"  - {value}" for value in item.actions] or ["  - none"])
+        lines.append("- decisions:")
+        lines.extend([f"  - {value}" for value in item.decisions] or ["  - none"])
+        lines.append("- improvements:")
+        lines.extend([f"  - {value}" for value in item.improvements] or ["  - none"])
+        lines.append(f"- tags: {', '.join(item.tags) if item.tags else 'none'}")
+        lines.append(f"- tools: {', '.join(item.tools) if item.tools else 'none'}")
+        lines.append("- evidence:")
+        lines.extend([f"  - {value}" for value in item.evidence_details] or ["  - none"])
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_source_timeline_jsonl(items: list[SourceTimelineItem]) -> str:
+    rows = []
+    for item in items:
+        rows.append(
+            json.dumps(
+                {
+                    "date": item.date,
+                    "source_id": item.source_id,
+                    "source_type": item.source_type,
+                    "category": item.category,
+                    "summary": item.summary,
+                    "actions": item.actions,
+                    "decisions": item.decisions,
+                    "improvements": item.improvements,
+                    "tags": item.tags,
+                    "tools": item.tools,
+                    "confidence": item.confidence,
+                    "confidence_reasons": item.confidence_reasons,
+                    "evidence_details": item.evidence_details,
+                    "source_sync_path": item.source_sync_path,
+                    "event_index": item.event_index,
+                },
+                ensure_ascii=False,
+            )
+        )
+    return "\n".join(rows) + ("\n" if rows else "")
+
+
+def build_source_timeline(
+    *,
+    source_sync_dir: Path = SOURCE_SYNC_DIR,
+    output_path: Path = SOURCE_TIMELINE_PATH,
+    jsonl_output_path: Path | None = SOURCE_TIMELINE_JSONL_PATH,
+) -> tuple[Path, Path | None, int]:
+    items = read_source_timeline_items(source_sync_dir)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        render_source_timeline_markdown(items, source_sync_dir=source_sync_dir),
+        encoding="utf-8",
+    )
+    written_jsonl_path: Path | None = None
+    if jsonl_output_path is not None:
+        jsonl_output_path.parent.mkdir(parents=True, exist_ok=True)
+        jsonl_output_path.write_text(render_source_timeline_jsonl(items), encoding="utf-8")
+        written_jsonl_path = jsonl_output_path
+    return output_path, written_jsonl_path, len(items)
+
+
+def inspect_source_timeline_items(
+    *,
+    source_sync_dir: Path = SOURCE_SYNC_DIR,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    source_type: str | None = None,
+    confidence: str | None = None,
+    min_confidence: str | None = None,
+    limit: int | None = None,
+) -> list[SourceTimelineItem]:
+    items = read_source_timeline_items(source_sync_dir)
+    return filter_source_timeline_items(
+        items,
+        from_date=from_date,
+        to_date=to_date,
+        source_type=source_type,
+        confidence=confidence,
+        min_confidence=min_confidence,
+        limit=limit,
+    )
+
+
 def read_source_sync_event_blocks(output_path: Path) -> tuple[str | None, list[str]]:
     if not output_path.exists():
         return None, []
@@ -3080,6 +3365,59 @@ def analyze() -> None:
         typer.echo("projects missing phases:")
         for name in missing_phases:
             typer.echo(f"- {name}")
+
+
+@app.command("build-source-timeline")
+def build_source_timeline_command(
+    source_sync_dir: str = typer.Option(str(SOURCE_SYNC_DIR), "--source-sync-dir", help="Directory that stores source_sync markdown files"),
+    output: str = typer.Option(str(SOURCE_TIMELINE_PATH), "--output", help="Markdown output path"),
+    jsonl_output: str | None = typer.Option(str(SOURCE_TIMELINE_JSONL_PATH), "--jsonl-output", help="Optional JSONL output path"),
+) -> None:
+    """Build a derived source timeline from source_sync markdown files."""
+    resolved_source_sync_dir = resolve_optional_input_path(source_sync_dir, root_candidates=[ROOT, REPO_ROOT])
+    resolved_output = resolve_output_path(output)
+    resolved_jsonl_output = resolve_output_path(jsonl_output) if jsonl_output else None
+    output_path, jsonl_path, item_count = build_source_timeline(
+        source_sync_dir=resolved_source_sync_dir,
+        output_path=resolved_output,
+        jsonl_output_path=resolved_jsonl_output,
+    )
+    typer.echo(f"Built source timeline: {display_path(output_path)}")
+    typer.echo(f"items: {item_count}")
+    if jsonl_path is not None:
+        typer.echo(f"JSONL: {display_path(jsonl_path)}")
+
+
+@app.command("inspect-source-timeline")
+def inspect_source_timeline(
+    source_sync_dir: str = typer.Option(str(SOURCE_SYNC_DIR), "--source-sync-dir", help="Directory that stores source_sync markdown files"),
+    from_date: str | None = typer.Option(None, "--from", help="Inclusive start date in YYYY-MM-DD"),
+    to_date: str | None = typer.Option(None, "--to", help="Inclusive end date in YYYY-MM-DD"),
+    source_type: str | None = typer.Option(None, "--source-type", help="Filter by source type"),
+    confidence: str | None = typer.Option(None, "--confidence", help="Filter by exact confidence"),
+    min_confidence: str | None = typer.Option(None, "--min-confidence", help="Filter by minimum confidence: low, medium, high"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of items to show"),
+) -> None:
+    """Inspect timeline items derived from source_sync markdown files."""
+    resolved_source_sync_dir = resolve_optional_input_path(source_sync_dir, root_candidates=[ROOT, REPO_ROOT])
+    items = inspect_source_timeline_items(
+        source_sync_dir=resolved_source_sync_dir,
+        from_date=from_date,
+        to_date=to_date,
+        source_type=source_type,
+        confidence=confidence,
+        min_confidence=min_confidence,
+        limit=limit,
+    )
+    typer.echo("Source Timeline")
+    typer.echo(f"items: {len(items)}")
+    if not items:
+        return
+    for item in items:
+        typer.echo("")
+        typer.echo(f"{item.date} [{item.confidence}] {item.source_type} {item.category}")
+        typer.echo(f"- {item.summary}")
+        typer.echo(f"  source_id: {item.source_id}")
 
 
 @app.command("generate-md")
