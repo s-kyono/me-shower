@@ -92,6 +92,13 @@ class RawSource:
     metadata: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class SourceConfidence:
+    level: str
+    score: int
+    reasons: list[str]
+
+
 class SourceAdapterError(Exception):
     pass
 
@@ -2448,20 +2455,137 @@ def extract_improvement_text(text: str) -> str | None:
     return summarize_line(text)
 
 
-def estimate_confidence(*, actions: list[str], tags: list[str], decisions: list[str], evidence_excerpt: str) -> str:
-    rules = load_confidence_rules()
-    levels = rules.get("levels", ["high", "medium", "low"])
-    thresholds = rules.get("thresholds", {})
-    if "[REDACTED_" in evidence_excerpt:
-        return str(levels[0]) if levels else "high"
-    signal_count = len(actions) + len(tags) + len(decisions)
-    high_min = int(thresholds.get("high_min_signals", 3))
-    medium_min = int(thresholds.get("medium_min_signals", 1))
-    if signal_count >= high_min:
-        return "high"
-    if signal_count >= medium_min:
-        return "medium"
+def confidence_level_from_score(score: int, rules: dict[str, Any]) -> str:
+    levels = rules.get("levels", {})
+    if not isinstance(levels, dict):
+        return "low"
+    ordered_levels = sorted(
+        (
+            (str(level), int(config.get("min_score", 0)))
+            for level, config in levels.items()
+            if isinstance(config, dict)
+        ),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    for level, min_score in ordered_levels:
+        if score >= min_score:
+            return level
     return "low"
+
+
+def confidence_signal_value(rules: dict[str, Any], group: str, key: str, default: int = 0) -> int:
+    values = rules.get(group, {})
+    if not isinstance(values, dict):
+        return default
+    return int(values.get(key, default))
+
+
+def known_source_types() -> set[str]:
+    return {"file", "github", "slack", "teams", "daily_report"}
+
+
+def calculate_source_confidence(
+    *,
+    raw_source: RawSource,
+    source_type: str,
+    actions: list[str],
+    decisions: list[str],
+    improvements: list[str],
+    tags: list[str],
+    tools: list[str],
+    noise_removed: list[str],
+    evidence_basis: str,
+    guard_findings: list[dict[str, str]],
+) -> SourceConfidence:
+    rules = load_confidence_rules()
+    score = 0
+    reasons: list[str] = []
+    normalized_source_type = source_type if source_type in known_source_types() else "unknown"
+    source_type_weights = rules.get("source_type_weights", {})
+    if isinstance(source_type_weights, dict):
+        score += int(source_type_weights.get(normalized_source_type, source_type_weights.get("unknown", 0)))
+    reasons.append(f"source_type:{normalized_source_type}")
+
+    metadata_values = [value for value in raw_source.metadata.values() if value not in ("", None, [], {})]
+    if raw_source.id.strip():
+        score += confidence_signal_value(rules, "signals", "source_id_present")
+        reasons.append("source_id:present")
+    else:
+        score += confidence_signal_value(rules, "penalties", "missing_source_id")
+        reasons.append("source_id:missing")
+
+    if actions:
+        score += confidence_signal_value(rules, "signals", "action_present")
+        reasons.append(f"actions:{len(actions)}")
+        if len(actions) >= 2:
+            score += confidence_signal_value(rules, "signals", "action_multiple_bonus")
+            reasons.append("actions:multiple")
+    else:
+        score += confidence_signal_value(rules, "penalties", "no_actions")
+        reasons.append("actions:0")
+
+    if decisions:
+        score += confidence_signal_value(rules, "signals", "decision_present")
+        reasons.append(f"decisions:{len(decisions)}")
+    if improvements:
+        score += confidence_signal_value(rules, "signals", "improvement_present")
+        reasons.append(f"improvements:{len(improvements)}")
+    if not decisions and not improvements:
+        score += confidence_signal_value(rules, "penalties", "no_decisions_or_improvements")
+        reasons.append("decisions_improvements:0")
+
+    if tags:
+        score += confidence_signal_value(rules, "signals", "tags_present")
+        reasons.append(f"tags:{len(tags)}")
+    if tools:
+        score += confidence_signal_value(rules, "signals", "tools_present")
+        reasons.append(f"tools:{len(tools)}")
+
+    if evidence_basis and evidence_basis != "有意な技術イベントなし":
+        score += confidence_signal_value(rules, "signals", "evidence_present")
+        reasons.append("evidence:present")
+    else:
+        score += confidence_signal_value(rules, "penalties", "weak_evidence")
+        reasons.append("evidence:weak")
+
+    if metadata_values:
+        score += confidence_signal_value(rules, "signals", "metadata_present")
+        reasons.append(f"metadata:{len(metadata_values)}")
+        if len(metadata_values) >= 5:
+            score += confidence_signal_value(rules, "signals", "metadata_rich_bonus")
+            reasons.append("metadata:rich")
+
+    if normalized_source_type in {"github", "daily_report"}:
+        score += confidence_signal_value(rules, "signals", "structured_source_bonus")
+        reasons.append("source:structured")
+
+    if normalized_source_type == "unknown":
+        score += confidence_signal_value(rules, "penalties", "unknown_source_type")
+        reasons.append("penalty:unknown_source_type")
+
+    if "low_signal" in noise_removed:
+        score += confidence_signal_value(rules, "penalties", "low_signal_noise")
+        reasons.append("noise:low_signal")
+    if len(noise_removed) >= 3:
+        score += confidence_signal_value(rules, "penalties", "many_noise_categories")
+        reasons.append(f"noise_removed:{len(noise_removed)}")
+
+    if len(guard_findings) >= 3:
+        score += confidence_signal_value(rules, "penalties", "redaction_heavy")
+        reasons.append(f"redaction_findings:{len(guard_findings)}")
+
+    if len(raw_source.content.strip()) < 20:
+        score += confidence_signal_value(rules, "penalties", "short_content")
+        reasons.append("content:short")
+
+    score = max(0, min(100, score))
+    reasons.append(f"score:{score}")
+    return SourceConfidence(
+        level=confidence_level_from_score(score, rules),
+        score=score,
+        reasons=reasons,
+    )
 
 
 def build_source_reference_path(raw_source: RawSource) -> Path:
@@ -2539,6 +2663,18 @@ def build_canonical_event_from_raw_source(raw_source: RawSource) -> dict[str, An
     if not evidence_basis:
         evidence_basis = "有意な技術イベントなし"
     evidence_excerpt = summarize_line(evidence_basis)[:200]
+    confidence = calculate_source_confidence(
+        raw_source=raw_source,
+        source_type=source_type,
+        actions=dedupe_preserving_order(actions),
+        decisions=dedupe_preserving_order(decisions),
+        improvements=dedupe_preserving_order(improvements),
+        tags=dedupe_preserving_order(tags),
+        tools=dedupe_preserving_order(tools),
+        noise_removed=dedupe_preserving_order(sorted(set(noise_categories))),
+        evidence_basis=evidence_basis,
+        guard_findings=findings,
+    )
 
     return {
         "schema": str(load_evidence_rules().get("schema", "canonical_event_v0")),
@@ -2553,12 +2689,8 @@ def build_canonical_event_from_raw_source(raw_source: RawSource) -> dict[str, An
         "tags": dedupe_preserving_order(tags),
         "tools": dedupe_preserving_order(tools),
         "noise_removed": dedupe_preserving_order(sorted(set(noise_categories))),
-        "confidence": estimate_confidence(
-            actions=actions,
-            tags=tags,
-            decisions=decisions,
-            evidence_excerpt=evidence_excerpt,
-        ),
+        "confidence": confidence.level,
+        "confidence_reasons": confidence.reasons,
         "evidence": [
             {
                 "kind": str(load_evidence_rules().get("excerpt_kind", "redacted_excerpt")),
@@ -2652,6 +2784,8 @@ def format_canonical_event(event: dict[str, Any]) -> str:
         "  noise_removed:",
         render_list(event["noise_removed"]),
         "  confidence: " + str(event["confidence"]),
+        "  confidence_reasons:",
+        render_list(event.get("confidence_reasons", [])),
         "  evidence:",
         render_evidence(event["evidence"]),
     ]

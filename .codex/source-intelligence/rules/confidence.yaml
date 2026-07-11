@@ -1,8 +1,45 @@
+version: 1
+
 levels:
-  - high
-  - medium
-  - low
+  high:
+    min_score: 80
+  medium:
+    min_score: 45
+  low:
+    min_score: 0
 
 thresholds:
-  high_min_signals: 3
-  medium_min_signals: 1
+  high_min_score: 80
+  medium_min_score: 45
+
+source_type_weights:
+  github: 15
+  daily_report: 10
+  file: 5
+  slack: 0
+  teams: 0
+  unknown: -15
+
+signals:
+  source_id_present: 10
+  action_present: 20
+  action_multiple_bonus: 10
+  decision_present: 15
+  improvement_present: 10
+  tags_present: 5
+  tools_present: 5
+  evidence_present: 10
+  metadata_present: 5
+  metadata_rich_bonus: 5
+  structured_source_bonus: 5
+
+penalties:
+  unknown_source_type: -15
+  no_actions: -20
+  no_decisions_or_improvements: -10
+  low_signal_noise: -10
+  many_noise_categories: -10
+  redaction_heavy: -15
+  short_content: -10
+  weak_evidence: -20
+  missing_source_id: -15

@@ -86,6 +86,8 @@ def test_source_rule_loaders_read_split_rule_files() -> None:
     assert "tool_keywords" in ai_tools
     assert "noise_keywords" in noise
     assert "thresholds" in confidence
+    assert "source_type_weights" in confidence
+    assert confidence["levels"]["high"]["min_score"] == 80
     assert evidence["schema"] == "canonical_event_v0_3"
     assert "labels" in sensitive_labels
 
@@ -400,7 +402,8 @@ def test_normalize_source_extracts_canonical_event_and_removes_noise(monkeypatch
     assert "fatigue" in content
     assert "drink" in content
     assert "meal" in content
-    assert "confidence: high" in content
+    assert "confidence: medium" in content
+    assert "confidence_reasons:" in content
     assert "[REDACTED_ORG_NAME]" not in content
     assert "[REDACTED_PHONE_NUMBER]" not in content
     assert "[REDACTED_GITHUB_URL]" not in content
@@ -1890,6 +1893,187 @@ def test_daily_report_free_style_noise_filtering(monkeypatch, tmp_path: Path) ->
     assert "今日は眠い" not in content
     assert "コーヒー" not in content
     assert "ラーメン" not in content
+
+
+def test_source_confidence_high_for_structured_github_event() -> None:
+    raw_source = main.RawSource(
+        id="github:s-kyono/me-shower:pr:3",
+        source_type="github",
+        origin="github:s-kyono/me-shower#3",
+        title="PR #3 Add source confidence",
+        content="\n".join(
+            [
+                "PR #3 Add source confidence",
+                "Repository: s-kyono/me-shower",
+                "State: merged",
+                "Labels: source-intelligence, confidence",
+                "Changed Files:",
+                "- app/src/main.py (+120 -12)",
+                "Body:",
+                "GraphQL Resolver を分離し、PRレビューで設計指摘を反映して方針を決定した",
+            ]
+        ),
+        captured_at="2026-07-11T09:30:00+09:00",
+        metadata={
+            "repo": "s-kyono/me-shower",
+            "kind": "pull_request",
+            "number": 3,
+            "state": "merged",
+            "created_at": "2026-07-10T08:00:00Z",
+            "updated_at": "2026-07-11T09:30:00Z",
+            "labels": ["source-intelligence", "confidence"],
+            "changed_files": ["app/src/main.py (+120 -12)"],
+            "source_reference": "github:s-kyono/me-shower#3",
+        },
+    )
+
+    event = main.build_canonical_event_from_raw_source(raw_source)
+
+    assert event["confidence"] == "high"
+    assert "source_type:github" in event["confidence_reasons"]
+    assert any(reason.startswith("actions:") for reason in event["confidence_reasons"])
+
+
+def test_source_confidence_medium_for_daily_report_with_clear_actions_and_noise() -> None:
+    raw_source = main.RawSource(
+        id="daily_report:2026-07-11.md",
+        source_type="daily_report",
+        origin="daily_report:app/data/daily_reports/2026-07-11.md",
+        title="Daily Report 2026-07-11",
+        content="\n".join(
+            [
+                "今日は眠い",
+                "コーヒー飲んだ",
+                "GraphQL Resolver を分離した",
+                "Slack Connector を追加した",
+                "昼はラーメン",
+            ]
+        ),
+        captured_at="2026-07-11",
+        metadata={
+            "kind": "freestyle_report",
+            "path": "/tmp/2026-07-11.md",
+            "relative_path": "2026-07-11.md",
+            "detected_date": "2026-07-11",
+            "source_reference": "daily_report:app/data/daily_reports/2026-07-11.md",
+            "format": "markdown",
+        },
+    )
+
+    event = main.build_canonical_event_from_raw_source(raw_source)
+
+    assert event["confidence"] == "medium"
+    assert "source_type:daily_report" in event["confidence_reasons"]
+    assert any(reason.startswith("noise_removed:") for reason in event["confidence_reasons"])
+
+
+def test_source_confidence_low_for_low_signal_report() -> None:
+    raw_source = main.RawSource(
+        id="daily_report:low-signal.txt",
+        source_type="daily_report",
+        origin="daily_report:app/data/daily_reports/low-signal.txt",
+        title="Daily Report 2026-07-11",
+        content="\n".join(
+            [
+                "今日は眠い",
+                "コーヒー飲んだ",
+                "昼はラーメン",
+            ]
+        ),
+        captured_at="2026-07-11",
+        metadata={
+            "kind": "freestyle_report",
+            "path": "/tmp/low-signal.txt",
+            "relative_path": "low-signal.txt",
+            "detected_date": "2026-07-11",
+            "source_reference": "daily_report:app/data/daily_reports/low-signal.txt",
+            "format": "text",
+        },
+    )
+
+    event = main.build_canonical_event_from_raw_source(raw_source)
+
+    assert event["confidence"] == "low"
+    assert "actions:0" in event["confidence_reasons"]
+
+
+def test_source_confidence_penalizes_unknown_source_type() -> None:
+    raw_source = main.RawSource(
+        id="unknown:1",
+        source_type="unknown",
+        origin="unknown:1",
+        title="Unknown source",
+        content="GraphQL Resolver を分離した",
+        captured_at="2026-07-11",
+        metadata={"path": "/tmp/unknown.txt"},
+    )
+
+    confidence = main.calculate_source_confidence(
+        raw_source=raw_source,
+        source_type="unknown",
+        actions=["GraphQL Resolver分離を実施"],
+        decisions=[],
+        improvements=[],
+        tags=["GraphQL", "Resolver"],
+        tools=[],
+        noise_removed=[],
+        evidence_basis="GraphQL Resolver分離を実施",
+        guard_findings=[],
+    )
+
+    assert confidence.level == "low"
+    assert "penalty:unknown_source_type" in confidence.reasons
+
+
+def test_source_confidence_reasons_do_not_include_raw_text() -> None:
+    raw_source = main.RawSource(
+        id="daily_report:2026-07-11.md",
+        source_type="daily_report",
+        origin="daily_report:app/data/daily_reports/2026-07-11.md",
+        title="Daily Report 2026-07-11",
+        content="CONFIDENCE_SENTINEL GraphQL Resolver を分離した",
+        captured_at="2026-07-11",
+        metadata={
+            "kind": "freestyle_report",
+            "path": "/tmp/2026-07-11.md",
+            "relative_path": "2026-07-11.md",
+            "detected_date": "2026-07-11",
+            "source_reference": "daily_report:app/data/daily_reports/2026-07-11.md",
+            "format": "markdown",
+        },
+    )
+
+    event = main.build_canonical_event_from_raw_source(raw_source)
+
+    assert "CONFIDENCE_SENTINEL" not in "\n".join(event["confidence_reasons"])
+
+
+def test_source_confidence_loaded_from_rules() -> None:
+    rules = main.load_confidence_rules()
+
+    assert rules["source_type_weights"]["github"] == 15
+    assert rules["levels"]["medium"]["min_score"] == 45
+
+
+def test_existing_canonical_event_output_still_contains_confidence(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    raw_file = data_dir / "raw_sources" / "2026-07-11_sample.txt"
+    raw_file.parent.mkdir(parents=True, exist_ok=True)
+    raw_file.write_text("GraphQL Resolver を分離した", encoding="utf-8")
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+
+    output_path = main.normalize_source_file(raw_file)
+    content = output_path.read_text(encoding="utf-8")
+
+    assert "confidence:" in content
+    assert "confidence_reasons:" in content
 
 
 def test_teams_connector_handles_api_failure(monkeypatch) -> None:
