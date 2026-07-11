@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import hashlib
 import json
 import os
@@ -154,6 +155,7 @@ class CommandResult:
 
 CommandRunner = Callable[[list[str]], CommandResult]
 SlackApiCaller = Callable[[str, dict[str, Any]], dict[str, Any]]
+GraphApiCaller = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 
 def run_command(command: list[str]) -> CommandResult:
@@ -415,6 +417,45 @@ def call_slack_api(method: str, params: dict[str, Any], *, token: str) -> dict[s
     return parsed
 
 
+def call_graph_api(path: str, params: dict[str, Any], *, token: str) -> dict[str, Any]:
+    query = urlencode({key: value for key, value in params.items() if value is not None})
+    url = f"https://graph.microsoft.com{path}"
+    if query:
+        url = f"{url}?{query}"
+    request = Request(
+        url=url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    try:
+        with urlopen(request) as response:
+            payload = response.read().decode("utf-8")
+    except HTTPError as exc:
+        message = sanitize_graph_error_message(exc.read().decode("utf-8", errors="replace") or str(exc))
+        if exc.code == 401:
+            raise SourceAccessError("Microsoft Graph token is invalid or expired.") from exc
+        if exc.code == 403:
+            raise SourceAccessError("Microsoft Graph access denied for the requested Teams channel.") from exc
+        if exc.code == 404:
+            raise SourceNotFoundError("Teams team, channel, or message was not found.") from exc
+        if exc.code == 429:
+            raise SourceAccessError("Microsoft Graph API rate limit exceeded.") from exc
+        raise SourceAccessError(f"Microsoft Graph API request failed: {message or 'http error'}") from exc
+    except URLError as exc:
+        raise SourceAccessError(f"Microsoft Graph API request failed: {sanitize_graph_error_message(str(exc.reason))}") from exc
+
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise SourceAccessError("Failed to parse Microsoft Graph API JSON response.") from exc
+    if not isinstance(parsed, dict):
+        raise SourceAccessError("Failed to parse Microsoft Graph API response.")
+    return parsed
+
+
 class SlackSourceAdapter:
     name = "slack"
 
@@ -566,6 +607,210 @@ class SlackSourceAdapter:
         if permalink:
             lines.append(f"Permalink: {permalink}")
         lines.extend(["Text:", text or "(empty)"])
+        return "\n".join(lines)
+
+
+class TeamsSourceAdapter:
+    name = "teams"
+
+    def __init__(
+        self,
+        team_id: str,
+        channel_id: str,
+        limit: int = 20,
+        token_env: str = "MS_GRAPH_TOKEN",
+        oldest: datetime | None = None,
+        latest: datetime | None = None,
+        api_caller: GraphApiCaller | None = None,
+    ) -> None:
+        self.team_id = team_id
+        self.channel_id = channel_id
+        self.limit = limit
+        self.token_env = token_env
+        self.oldest = oldest
+        self.latest = latest
+        self._api_caller = api_caller
+
+    def discover(self) -> list[RawSource]:
+        messages = self._fetch_messages()
+        return [self._build_raw_source(message) for message in messages]
+
+    def fetch(self, source_id: str) -> RawSource:
+        for source in self.discover():
+            if source.id == source_id:
+                return source
+        raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+
+    def _fetch_messages(self) -> list[dict[str, Any]]:
+        payload = self._call_api(
+            f"/v1.0/teams/{self.team_id}/channels/{self.channel_id}/messages",
+            {"$top": min(self.limit, 50)},
+        )
+        messages = payload.get("value")
+        if not isinstance(messages, list):
+            raise SourceAccessError("Microsoft Graph API did not return a valid Teams message list.")
+        filtered = [item for item in messages if isinstance(item, dict) and str(item.get("id") or "").strip()]
+        return [item for item in filtered if self._is_within_range(str(item.get("createdDateTime") or "").strip())]
+
+    def _call_api(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        token = self._resolve_token()
+        caller = self._api_caller or (lambda api_path, api_params: call_graph_api(api_path, api_params, token=token))
+        try:
+            payload = caller(path, params)
+        except SourceAdapterError:
+            raise
+        except Exception as exc:
+            raise SourceAccessError(f"Microsoft Graph API request failed: {sanitize_graph_error_message(str(exc))}") from exc
+        if not isinstance(payload, dict):
+            raise SourceAccessError("Failed to parse Microsoft Graph API response.")
+        if "error" in payload:
+            raise self._build_api_error(payload)
+        return payload
+
+    def _resolve_token(self) -> str:
+        token = os.getenv(self.token_env, "").strip()
+        if not token:
+            raise SourceAccessError(f"Microsoft Graph token environment variable is not set: {self.token_env}")
+        return token
+
+    def _build_api_error(self, payload: dict[str, Any]) -> SourceAdapterError:
+        raw_error = payload.get("error")
+        if isinstance(raw_error, dict):
+            code = str(raw_error.get("code") or "unknown_error").strip()
+            message = str(raw_error.get("message") or "").strip()
+        else:
+            code = str(raw_error or "unknown_error").strip()
+            message = ""
+        normalized = code.lower()
+        full_message = sanitize_graph_error_message(f"{code} {message}".strip())
+        if normalized in {"itemnotfound", "notfound", "erroritemnotfound"}:
+            return SourceNotFoundError(f"Teams resource not found: {code}")
+        if normalized in {"unauthenticated", "invalidauthenticationtoken", "accesstokenexpired"}:
+            return SourceAccessError("Microsoft Graph token is invalid or expired.")
+        if normalized in {"forbidden", "accessdenied", "authorization_requestdenied"}:
+            return SourceAccessError("Microsoft Graph access denied for the requested Teams channel.")
+        if normalized in {"toomanyrequests", "throttledrequest"}:
+            return SourceAccessError("Microsoft Graph API rate limit exceeded.")
+        return SourceAccessError(f"Microsoft Graph API request failed: {full_message or code}")
+
+    def _is_within_range(self, created_at: str) -> bool:
+        if not created_at:
+            return True
+        created = teams_datetime_to_datetime(created_at)
+        if self.oldest is not None and created < self.oldest:
+            return False
+        if self.latest is not None and created > self.latest:
+            return False
+        return True
+
+    def _build_raw_source(self, payload: dict[str, Any]) -> RawSource:
+        message_id = str(payload.get("id") or "").strip()
+        created_at = str(payload.get("createdDateTime") or "").strip()
+        last_modified_at = str(payload.get("lastModifiedDateTime") or "").strip()
+        subject = str(payload.get("subject") or "").strip()
+        summary = str(payload.get("summary") or "").strip()
+        importance = str(payload.get("importance") or "normal").strip() or "normal"
+        message_type = str(payload.get("messageType") or "message").strip() or "message"
+        reply_to_id = str(payload.get("replyToId") or "").strip()
+        web_url = str(payload.get("webUrl") or "").strip()
+        body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+        body_content_type = str(body.get("contentType") or "text").strip() or "text"
+        body_content = str(body.get("content") or "").strip()
+        body_text = teams_html_body_to_text(body_content) if body_content_type.lower() == "html" else normalize_text_whitespace(html.unescape(body_content))
+        from_user_id, from_user_display_name = self._extract_from_user(payload.get("from"))
+        captured_at = created_at or datetime.now().astimezone().isoformat(timespec="seconds")
+        created_datetime = teams_datetime_to_datetime(captured_at)
+
+        metadata: dict[str, Any] = {
+            "team_id": self.team_id,
+            "channel_id": self.channel_id,
+            "kind": "channel_message",
+            "message_id": message_id,
+            "reply_to_id": reply_to_id or None,
+            "created_at": created_at,
+            "last_modified_at": last_modified_at,
+            "message_type": message_type,
+            "importance": importance,
+            "from_user_id": from_user_id,
+            "from_user_display_name": from_user_display_name,
+            "body_content_type": body_content_type,
+        }
+        if subject:
+            metadata["subject"] = subject
+        if summary:
+            metadata["summary"] = summary
+        if web_url:
+            metadata["web_url"] = web_url
+
+        return RawSource(
+            id=f"teams:{self.team_id}:{self.channel_id}:{message_id}",
+            source_type="teams",
+            origin=f"teams:{self.team_id}:{self.channel_id}:{message_id}",
+            title=f"Teams message {created_datetime.strftime('%Y-%m-%d %H:%M')}",
+            content=self._build_content(
+                message_id=message_id,
+                created_at=created_at,
+                last_modified_at=last_modified_at,
+                subject=subject,
+                summary=summary,
+                importance=importance,
+                message_type=message_type,
+                reply_to_id=reply_to_id,
+                web_url=web_url,
+                from_user_id=from_user_id,
+                from_user_display_name=from_user_display_name,
+                body_content_type=body_content_type,
+                body_text=body_text,
+            ),
+            captured_at=created_at or created_datetime.isoformat(timespec="seconds"),
+            metadata=metadata,
+        )
+
+    def _extract_from_user(self, from_value: Any) -> tuple[str, str]:
+        if not isinstance(from_value, dict):
+            return "", ""
+        user = from_value.get("user")
+        if not isinstance(user, dict):
+            return "", ""
+        user_id = str(user.get("id") or "").strip()
+        display_name = str(user.get("displayName") or "").strip()
+        return user_id, display_name
+
+    def _build_content(
+        self,
+        *,
+        message_id: str,
+        created_at: str,
+        last_modified_at: str,
+        subject: str,
+        summary: str,
+        importance: str,
+        message_type: str,
+        reply_to_id: str,
+        web_url: str,
+        from_user_id: str,
+        from_user_display_name: str,
+        body_content_type: str,
+        body_text: str,
+    ) -> str:
+        lines = [
+            f"Teams Team ID: {self.team_id}",
+            f"Teams Channel ID: {self.channel_id}",
+            f"Message ID: {message_id}",
+            f"Created At: {created_at or 'unknown'}",
+            f"Last Modified At: {last_modified_at or 'unknown'}",
+            f"Subject: {subject or 'none'}",
+            f"Summary: {summary or 'none'}",
+            f"Importance: {importance or 'normal'}",
+            f"Message Type: {message_type or 'message'}",
+            f"Reply To ID: {reply_to_id or 'none'}",
+            f"From User ID: {from_user_id or 'unknown'}",
+            f"From User Display Name: {from_user_display_name or 'unknown'}",
+            f"Body Content Type: {body_content_type or 'text'}",
+        ]
+        if web_url:
+            lines.append(f"Web URL: {web_url}")
+        lines.extend(["Text:", body_text or "(empty)"])
         return "\n".join(lines)
 
 
@@ -1192,6 +1437,12 @@ def build_source_adapter_registry(github_repo: str | None = None) -> SourceAdapt
         UnconfiguredSourceAdapter(
             "slack",
             "Slack adapter requires a channel and token env. Use inspect-slack-source or normalize-slack-source.",
+        )
+    )
+    registry.register(
+        UnconfiguredSourceAdapter(
+            "teams",
+            "Teams adapter requires a team id, channel id, and token env. Use inspect-teams-source or normalize-teams-source.",
         )
     )
     if github_repo:
@@ -2097,7 +2348,7 @@ def build_canonical_event_from_raw_source(raw_source: RawSource) -> dict[str, An
         default=("communication", 0),
     )[0]
     summary = actions[0] if actions else "作業上有意な技術イベントを抽出できなかった"
-    if raw_source.source_type in {"github", "slack"}:
+    if raw_source.source_type in {"github", "slack", "teams"}:
         evidence_basis = " / ".join(dedupe_preserving_order(actions[:3] + decisions[:2] + improvements[:2]))
     else:
         evidence_basis = " / ".join(kept_lines[:3]) if kept_lines else "有意な技術イベントなし"
@@ -2302,12 +2553,19 @@ def normalize_github_sources(repo: str, limit: int = 20, command_runner: Command
     return normalize_raw_sources(adapter.discover(), action_label="normalize-github-source")
 
 
-def parse_cli_datetime(value: str | None) -> str | None:
+def parse_iso_datetime(value: str | None) -> datetime | None:
     if value is None:
         return None
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone()
+
+
+def parse_cli_datetime(value: str | None) -> str | None:
+    parsed = parse_iso_datetime(value)
+    if parsed is None:
+        return None
     return slack_datetime_to_api_ts(parsed)
 
 
@@ -2329,6 +2587,41 @@ def sanitize_slack_error_message(message: str) -> str:
     return sanitized.strip()
 
 
+def teams_datetime_to_datetime(value: str) -> datetime:
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise SourceAccessError(f"Invalid Teams datetime: {value}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone()
+
+
+def teams_html_body_to_text(value: str) -> str:
+    text = html.unescape(value or "")
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</?(?:div|p|li|ul|ol|span|body|html)\b[^>]*>", " ", text)
+    text = re.sub(r"(?i)</?at\b[^>]*>", " ", text)
+    text = re.sub(r"(?is)<[^>]+>", " ", text)
+    return normalize_text_whitespace(text)
+
+
+def normalize_text_whitespace(value: str) -> str:
+    collapsed = re.sub(r"[ \t\r\f\v]+", " ", value)
+    collapsed = re.sub(r"\s*\n\s*", "\n", collapsed)
+    collapsed = re.sub(r"\n{2,}", "\n", collapsed)
+    return collapsed.strip()
+
+
+def sanitize_graph_error_message(message: str) -> str:
+    sanitized = sanitize_command_error(message)
+    sanitized = re.sub(r"\beyJ[a-zA-Z0-9_\-]+=*\.[a-zA-Z0-9_\-]+=*(?:\.[a-zA-Z0-9_\-+/=]*)?\b", "[REDACTED_MS_GRAPH_TOKEN]", sanitized)
+    return sanitized.strip()
+
+
 def normalize_slack_sources(
     channel: str,
     *,
@@ -2347,6 +2640,28 @@ def normalize_slack_sources(
         api_caller=api_caller,
     )
     return normalize_raw_sources(adapter.discover(), action_label="normalize-slack-source")
+
+
+def normalize_teams_sources(
+    team_id: str,
+    channel_id: str,
+    *,
+    limit: int = 20,
+    token_env: str = "MS_GRAPH_TOKEN",
+    oldest: datetime | None = None,
+    latest: datetime | None = None,
+    api_caller: GraphApiCaller | None = None,
+) -> list[Path]:
+    adapter = TeamsSourceAdapter(
+        team_id=team_id,
+        channel_id=channel_id,
+        limit=limit,
+        token_env=token_env,
+        oldest=oldest,
+        latest=latest,
+        api_caller=api_caller,
+    )
+    return normalize_raw_sources(adapter.discover(), action_label="normalize-teams-source")
 
 
 def issue_resume(title: str, note: str, theme: str = "forest") -> Path:
@@ -2499,6 +2814,40 @@ def inspect_slack_source(
         typer.echo(f"  origin: {source.origin}")
 
 
+@app.command("inspect-teams-source")
+def inspect_teams_source(
+    team_id: str = typer.Option(..., "--team-id", help="Microsoft Teams team ID"),
+    channel_id: str = typer.Option(..., "--channel-id", help="Microsoft Teams channel ID"),
+    limit: int = typer.Option(20, "--limit", min=1, max=50, help="Maximum number of messages to inspect"),
+    token_env: str = typer.Option("MS_GRAPH_TOKEN", "--token-env", help="Environment variable that holds the Microsoft Graph token"),
+    oldest: str | None = typer.Option(None, "--oldest", help="Oldest message time in ISO 8601"),
+    latest: str | None = typer.Option(None, "--latest", help="Latest message time in ISO 8601"),
+) -> None:
+    """Inspect Teams channel messages as raw sources."""
+    adapter = TeamsSourceAdapter(
+        team_id=team_id,
+        channel_id=channel_id,
+        limit=limit,
+        token_env=token_env,
+        oldest=parse_iso_datetime(oldest),
+        latest=parse_iso_datetime(latest),
+    )
+    try:
+        sources = adapter.discover()
+    except SourceAdapterError as exc:
+        typer.echo(f"Teams source inspection failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"adapter: {adapter.name}")
+    typer.echo(f"team_id: {team_id}")
+    typer.echo(f"channel_id: {channel_id}")
+    typer.echo(f"discovered_sources: {len(sources)}")
+    for source in sources:
+        typer.echo(f"- id: {source.id}")
+        typer.echo(f"  title: {source.title}")
+        typer.echo(f"  origin: {source.origin}")
+
+
 @app.command("normalize-github-source")
 def normalize_github_source(
     repo: str = typer.Option(..., "--repo", help="GitHub repository in owner/name format"),
@@ -2544,6 +2893,37 @@ def normalize_slack_source(
         typer.echo("No Slack messages found.")
         return
     typer.echo(f"Normalized {len(output_paths)} day files from Slack")
+    for path in output_paths:
+        typer.echo(f"- {path.relative_to(ROOT)}")
+
+
+@app.command("normalize-teams-source")
+def normalize_teams_source(
+    team_id: str = typer.Option(..., "--team-id", help="Microsoft Teams team ID"),
+    channel_id: str = typer.Option(..., "--channel-id", help="Microsoft Teams channel ID"),
+    limit: int = typer.Option(20, "--limit", min=1, max=50, help="Maximum number of messages to normalize"),
+    token_env: str = typer.Option("MS_GRAPH_TOKEN", "--token-env", help="Environment variable that holds the Microsoft Graph token"),
+    oldest: str | None = typer.Option(None, "--oldest", help="Oldest message time in ISO 8601"),
+    latest: str | None = typer.Option(None, "--latest", help="Latest message time in ISO 8601"),
+) -> None:
+    """Normalize Teams channel messages into canonical event markdown files."""
+    try:
+        output_paths = normalize_teams_sources(
+            team_id=team_id,
+            channel_id=channel_id,
+            limit=limit,
+            token_env=token_env,
+            oldest=parse_iso_datetime(oldest),
+            latest=parse_iso_datetime(latest),
+        )
+    except SourceAdapterError as exc:
+        typer.echo(f"Teams source normalization failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not output_paths:
+        typer.echo("No Teams messages found.")
+        return
+    typer.echo(f"Normalized {len(output_paths)} day files from Teams")
     for path in output_paths:
         typer.echo(f"- {path.relative_to(ROOT)}")
 

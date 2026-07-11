@@ -32,6 +32,17 @@ def build_slack_api_caller(fixtures: dict[tuple[str, tuple[tuple[str, object], .
     return caller
 
 
+def build_graph_api_caller(fixtures: dict[tuple[str, tuple[tuple[str, object], ...]], dict[str, object]]):
+    def caller(path: str, params: dict[str, object]) -> dict[str, object]:
+        normalized = tuple(sorted((key, value) for key, value in params.items() if value is not None))
+        key = (path, normalized)
+        if key not in fixtures:
+            raise AssertionError(f"Unexpected Microsoft Graph API call: {path} {params}")
+        return fixtures[key]
+
+    return caller
+
+
 def test_load_resume_data_has_projects() -> None:
     data = load_resume_data()
 
@@ -481,9 +492,10 @@ def test_source_adapter_registry_lists_file_adapter(monkeypatch, tmp_path: Path)
     assert "file" in registry.list()
     assert "github" in registry.list()
     assert "slack" in registry.list()
+    assert "teams" in registry.list()
     result = runner.invoke(main.app, ["list-source-adapters"])
     assert result.exit_code == 0
-    assert result.stdout.strip().splitlines() == ["file", "github", "slack"]
+    assert result.stdout.strip().splitlines() == ["file", "github", "slack", "teams"]
 
 
 def test_inspect_source_adapter_lists_discovered_sources(monkeypatch, tmp_path: Path) -> None:
@@ -786,6 +798,100 @@ def test_slack_source_adapter_fetches_source_by_id(monkeypatch) -> None:
     assert source.metadata["ts"] == "1781736600.000100"
     with pytest.raises(main.SourceNotFoundError):
         adapter.fetch("slack:C0123456789:missing")
+
+
+def test_teams_html_body_to_text() -> None:
+    body = "<div>GraphQL Resolver を分離しました <at id=\"0\">山田太郎</at> &amp; schema を更新</div>"
+
+    text = main.teams_html_body_to_text(body)
+
+    assert text == "GraphQL Resolver を分離しました 山田太郎 & schema を更新"
+
+
+def test_teams_source_adapter_discovers_messages(monkeypatch) -> None:
+    monkeypatch.setenv("MS_GRAPH_TOKEN", "eyJ.fake.token")
+    fixtures = {
+        (
+            "/v1.0/teams/team-123/channels/channel-456/messages",
+            (("$top", 20),),
+        ): {
+            "value": [
+                {
+                    "id": "1700000000001",
+                    "createdDateTime": "2026-07-11T01:30:00Z",
+                    "lastModifiedDateTime": "2026-07-11T01:45:00Z",
+                    "subject": "",
+                    "summary": "",
+                    "importance": "normal",
+                    "messageType": "message",
+                    "replyToId": None,
+                    "webUrl": "https://teams.microsoft.com/l/message/abc",
+                    "body": {
+                        "contentType": "html",
+                        "content": "<div>GraphQL Resolver を分離しました <at id=\"0\">山田太郎</at> &amp; schema を更新</div>",
+                    },
+                    "from": {
+                        "user": {
+                            "id": "user-123",
+                            "displayName": "山田太郎",
+                        }
+                    },
+                }
+            ]
+        }
+    }
+
+    adapter = main.TeamsSourceAdapter(
+        team_id="team-123",
+        channel_id="channel-456",
+        api_caller=build_graph_api_caller(fixtures),
+    )
+    sources = adapter.discover()
+
+    assert len(sources) == 1
+    source = sources[0]
+    assert source.source_type == "teams"
+    assert source.metadata["kind"] == "channel_message"
+    assert source.id == "teams:team-123:channel-456:1700000000001"
+    assert source.origin == "teams:team-123:channel-456:1700000000001"
+    assert "GraphQL Resolver を分離しました 山田太郎 & schema を更新" in source.content
+    assert "<at id=" not in source.content
+
+
+def test_teams_source_adapter_fetches_source_by_id(monkeypatch) -> None:
+    monkeypatch.setenv("MS_GRAPH_TOKEN", "eyJ.fake.token")
+    fixtures = {
+        (
+            "/v1.0/teams/team-123/channels/channel-456/messages",
+            (("$top", 20),),
+        ): {
+            "value": [
+                {
+                    "id": "1700000000001",
+                    "createdDateTime": "2026-07-11T01:30:00Z",
+                    "lastModifiedDateTime": "2026-07-11T01:45:00Z",
+                    "importance": "normal",
+                    "messageType": "message",
+                    "body": {
+                        "contentType": "html",
+                        "content": "<div>GraphQL Resolver を分離しました</div>",
+                    },
+                    "from": {"user": {"id": "user-123", "displayName": "山田太郎"}},
+                }
+            ]
+        }
+    }
+
+    adapter = main.TeamsSourceAdapter(
+        team_id="team-123",
+        channel_id="channel-456",
+        api_caller=build_graph_api_caller(fixtures),
+    )
+    source = adapter.fetch("teams:team-123:channel-456:1700000000001")
+
+    assert source.metadata["message_id"] == "1700000000001"
+    with pytest.raises(main.SourceNotFoundError):
+        adapter.fetch("teams:team-123:channel-456:missing")
 
 
 def test_github_connector_does_not_persist_raw_content(monkeypatch, tmp_path: Path) -> None:
@@ -1271,6 +1377,199 @@ def test_slack_connector_handles_api_failure(monkeypatch) -> None:
     assert "Slack API access denied" in message
 
 
+def test_teams_connector_does_not_persist_raw_message(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("MS_GRAPH_TOKEN", "eyJ.fake.token")
+    fixtures = {
+        (
+            "/v1.0/teams/team-123/channels/channel-456/messages",
+            (("$top", 10),),
+        ): {
+            "value": [
+                {
+                    "id": "1700000000001",
+                    "createdDateTime": "2026-07-11T01:30:00Z",
+                    "lastModifiedDateTime": "2026-07-11T01:45:00Z",
+                    "importance": "normal",
+                    "messageType": "message",
+                    "body": {
+                        "contentType": "html",
+                        "content": "<div>TEAMS_RAW_HTML_SENTINEL GraphQL Resolver を分離した</div>",
+                    },
+                    "from": {"user": {"id": "user-123", "displayName": "山田太郎"}},
+                }
+            ]
+        }
+    }
+
+    output_paths = main.normalize_teams_sources(
+        team_id="team-123",
+        channel_id="channel-456",
+        limit=10,
+        api_caller=build_graph_api_caller(fixtures),
+    )
+
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert "GraphQL Resolver分離を実施" in content
+    assert "TEAMS_RAW_HTML_SENTINEL" not in content
+    assert "<div>" not in content
+
+
+def test_teams_connector_does_not_overwrite_existing_source_sync(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    source_sync_dir.mkdir(parents=True, exist_ok=True)
+    (source_sync_dir / "2026-07-11.md").write_text(
+        "\n".join(
+            [
+                "# Canonical Events",
+                "",
+                "date: 2026-07-11",
+                "",
+                "## Event 1",
+                "",
+                "- schema: canonical_event_v0_3",
+                "- date: 2026-07-11",
+                "  source_id: file:daily:1",
+                "  source_type: file",
+                "  category: implementation",
+                "  summary: 既存 file event",
+                "  actions:",
+                "  - 既存 file event",
+                "  decisions:",
+                "  - none",
+                "  improvements:",
+                "  - none",
+                "  tags:",
+                "  - none",
+                "  tools:",
+                "  - none",
+                "  noise_removed:",
+                "  - none",
+                "  confidence: medium",
+                "  evidence:",
+                "  - kind: source_reference",
+                "    detail: sample.txt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("MS_GRAPH_TOKEN", "eyJ.fake.token")
+    fixtures = {
+        (
+            "/v1.0/teams/team-123/channels/channel-456/messages",
+            (("$top", 10),),
+        ): {
+            "value": [
+                {
+                    "id": "1700000000001",
+                    "createdDateTime": "2026-07-11T01:30:00Z",
+                    "lastModifiedDateTime": "2026-07-11T01:45:00Z",
+                    "importance": "normal",
+                    "messageType": "message",
+                    "body": {"contentType": "html", "content": "<div>GraphQL Resolver を分離した</div>"},
+                    "from": {"user": {"id": "user-123", "displayName": "山田太郎"}},
+                }
+            ]
+        }
+    }
+
+    output_paths = main.normalize_teams_sources(
+        team_id="team-123",
+        channel_id="channel-456",
+        limit=10,
+        api_caller=build_graph_api_caller(fixtures),
+    )
+
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert "既存 file event" in content
+    assert "teams:team-123:channel-456:1700000000001" in content
+    assert content.count("## Event 1") == 1
+    assert content.count("## Event 2") == 1
+    assert "## Event 1\n\n## Event" not in content
+
+
+def test_teams_connector_does_not_duplicate_same_message(monkeypatch, tmp_path: Path) -> None:
+    app_root = tmp_path / "app"
+    data_dir = app_root / "data"
+    source_sync_dir = data_dir / "source_sync"
+    reviews_dir = app_root / "reviews" / "guard"
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    monkeypatch.setattr(main, "GUARD_REVIEWS_DIR", reviews_dir)
+    monkeypatch.setenv("MS_GRAPH_TOKEN", "eyJ.fake.token")
+    fixtures = {
+        (
+            "/v1.0/teams/team-123/channels/channel-456/messages",
+            (("$top", 10),),
+        ): {
+            "value": [
+                {
+                    "id": "1700000000001",
+                    "createdDateTime": "2026-07-11T01:30:00Z",
+                    "lastModifiedDateTime": "2026-07-11T01:45:00Z",
+                    "importance": "normal",
+                    "messageType": "message",
+                    "body": {"contentType": "html", "content": "<div>GraphQL Resolver を分離した</div>"},
+                    "from": {"user": {"id": "user-123", "displayName": "山田太郎"}},
+                }
+            ]
+        }
+    }
+
+    caller = build_graph_api_caller(fixtures)
+    main.normalize_teams_sources(team_id="team-123", channel_id="channel-456", limit=10, api_caller=caller)
+    output_paths = main.normalize_teams_sources(team_id="team-123", channel_id="channel-456", limit=10, api_caller=caller)
+
+    content = output_paths[0].read_text(encoding="utf-8")
+    assert content.count("source_id: teams:team-123:channel-456:1700000000001") == 1
+    assert content.count("## Event 1") == 1
+    assert "## Event 2" not in content
+
+
+def test_teams_connector_handles_api_failure(monkeypatch) -> None:
+    monkeypatch.setenv("MS_GRAPH_TOKEN", "eyJ.super.secret.token")
+    fixtures = {
+        (
+            "/v1.0/teams/team-123/channels/channel-456/messages",
+            (("$top", 20),),
+        ): {
+            "error": {
+                "code": "InvalidAuthenticationToken",
+                "message": "token eyJ.super.secret.token is invalid",
+            }
+        }
+    }
+    adapter = main.TeamsSourceAdapter(
+        team_id="team-123",
+        channel_id="channel-456",
+        api_caller=build_graph_api_caller(fixtures),
+    )
+
+    with pytest.raises(main.SourceAccessError) as exc_info:
+        adapter.discover()
+
+    message = str(exc_info.value)
+    assert "eyJ.super.secret.token" not in message
+    assert "invalid or expired" in message
+
+
 def test_existing_source_adapter_cli_still_works(monkeypatch, tmp_path: Path) -> None:
     app_root = tmp_path / "app"
     data_dir = app_root / "data"
@@ -1292,6 +1591,8 @@ def test_existing_source_adapter_cli_still_works(monkeypatch, tmp_path: Path) ->
     assert list_result.exit_code == 0
     assert "file" in list_result.stdout
     assert "github" in list_result.stdout
+    assert "slack" in list_result.stdout
+    assert "teams" in list_result.stdout
     assert inspect_result.exit_code == 0
     assert "adapter: file" in inspect_result.stdout
     assert normalize_result.exit_code == 0

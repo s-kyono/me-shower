@@ -68,6 +68,12 @@ uv run me-shower inspect-slack-source --channel C0123456789 --limit 20 --token-e
 # Slack source を正規化
 uv run me-shower normalize-slack-source --channel C0123456789 --limit 20 --token-env SLACK_BOT_TOKEN
 
+# Teams source を inspect
+uv run me-shower inspect-teams-source --team-id TEAM_ID --channel-id CHANNEL_ID --limit 20 --token-env MS_GRAPH_TOKEN
+
+# Teams source を正規化
+uv run me-shower normalize-teams-source --team-id TEAM_ID --channel-id CHANNEL_ID --limit 20 --token-env MS_GRAPH_TOKEN
+
 # Skill改善提案を生成
 uv run me-shower loop-skills
 
@@ -135,6 +141,22 @@ uv run me-shower normalize-slack-source --channel C0123456789 --limit 20 --token
 ```
 
 Slack message を `RawSource` として取得し、Evidence Guard と Noisy Input Normalization を通して `app/data/source_sync/YYYY-MM-DD.md` に追記します。raw Slack message 本文や token は保存せず、既存の同日 `source_sync` を消さずに `source_id` ベースで重複を防ぎます。
+
+### `uv run me-shower inspect-teams-source`
+
+```bash
+uv run me-shower inspect-teams-source --team-id TEAM_ID --channel-id CHANNEL_ID --limit 20 --token-env MS_GRAPH_TOKEN
+```
+
+Microsoft Teams channel messages を `RawSource` として確認します。token は CLI 引数ではなく環境変数名で指定し、inspect 出力には raw message text や raw HTML を出しません。
+
+### `uv run me-shower normalize-teams-source`
+
+```bash
+uv run me-shower normalize-teams-source --team-id TEAM_ID --channel-id CHANNEL_ID --limit 20 --token-env MS_GRAPH_TOKEN
+```
+
+Teams channel messages を `RawSource` として取得し、HTML body を text 化したうえで Evidence Guard と Noisy Input Normalization を通して `app/data/source_sync/YYYY-MM-DD.md` に追記します。raw Teams message 本文、raw HTML、token は保存せず、既存の同日 `source_sync` を消さずに `source_id` ベースで重複を防ぎます。
 
 ### `uv run me-shower loop-skills`
 
