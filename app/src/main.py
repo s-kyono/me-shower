@@ -28,6 +28,7 @@ app = typer.Typer(help="Generate career resume Markdown and PDF outputs.")
 ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ROOT.parent
 DATA_DIR = ROOT / "data"
+DAILY_REPORTS_DIR = DATA_DIR / "daily_reports"
 TEMPLATE_DIR = ROOT / "templates"
 THEMES_DIR = TEMPLATE_DIR / "themes"
 GENERATED_DIR = ROOT / "generated"
@@ -144,6 +145,80 @@ class FileSourceAdapter:
                 "size_bytes": stat.st_size,
             },
         )
+
+
+class DailyReportSourceAdapter:
+    name = "daily_report"
+
+    def __init__(self, reports_dir: Path, limit: int | None = None) -> None:
+        self.reports_dir = reports_dir
+        self.limit = limit
+
+    def discover(self) -> list[RawSource]:
+        self.reports_dir.mkdir(parents=True, exist_ok=True)
+        paths = [
+            path
+            for path in sorted(self.reports_dir.rglob("*"))
+            if path.is_file() and path.suffix.lower() in {".md", ".txt"}
+        ]
+        sources = [self._build_raw_source(path) for path in paths]
+        sources.sort(key=lambda item: (item.metadata.get("detected_date", ""), item.id), reverse=True)
+        if self.limit is not None:
+            return sources[: self.limit]
+        return sources
+
+    def fetch(self, source_id: str) -> RawSource:
+        for source in self.discover():
+            if source.id == source_id:
+                return source
+        raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+
+    def _build_raw_source(self, path: Path) -> RawSource:
+        resolved = path.resolve()
+        stat = resolved.stat()
+        relative_path = self._relative_path(resolved)
+        raw_text = resolved.read_text(encoding="utf-8", errors="replace")
+        parsed = parse_optional_frontmatter(raw_text)
+        content = parsed["content"]
+        frontmatter = parsed["frontmatter"]
+        detected_date = detect_daily_report_date(
+            resolved,
+            raw_text,
+            content,
+            frontmatter,
+            fallback=datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        )
+        source_reference = f"daily_report:{display_path(resolved)}"
+        title_suffix = detected_date or resolved.stem
+        metadata: dict[str, Any] = {
+            "kind": infer_daily_report_kind(resolved, frontmatter, content),
+            "path": str(resolved),
+            "relative_path": relative_path,
+            "detected_date": detected_date,
+            "source_reference": source_reference,
+            "format": "markdown" if resolved.suffix.lower() == ".md" else "text",
+        }
+        if frontmatter:
+            metadata["frontmatter"] = frontmatter
+            tags = frontmatter.get("tags")
+            if isinstance(tags, list):
+                metadata["tags"] = [str(tag) for tag in tags]
+
+        return RawSource(
+            id=f"daily_report:{relative_path}",
+            source_type="daily_report",
+            origin=source_reference,
+            title=f"Daily Report {title_suffix}",
+            content=content,
+            captured_at=detected_date or datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            metadata=metadata,
+        )
+
+    def _relative_path(self, path: Path) -> str:
+        try:
+            return path.relative_to(self.reports_dir).as_posix()
+        except ValueError:
+            return path.name
 
 
 @dataclass(frozen=True)
@@ -838,6 +913,25 @@ def read_yaml(path: Path) -> Any:
         return yaml.safe_load(file) or {}
 
 
+def parse_optional_frontmatter(text: str) -> dict[str, Any]:
+    if not text.startswith("---\n"):
+        return {"frontmatter": {}, "content": text}
+    match = re.match(r"(?s)^---\n(.*?)\n---\n?", text)
+    if not match:
+        return {"frontmatter": {}, "content": text}
+    raw_frontmatter = match.group(1)
+    try:
+        parsed = yaml.safe_load(raw_frontmatter) or {}
+    except yaml.YAMLError:
+        return {"frontmatter": {}, "content": text}
+    if not isinstance(parsed, dict):
+        return {"frontmatter": {}, "content": text}
+    return {
+        "frontmatter": parsed,
+        "content": text[match.end() :].lstrip("\n"),
+    }
+
+
 def source_intelligence_rules_dir() -> Path:
     return REPO_ROOT / ".codex" / "source-intelligence" / "rules"
 
@@ -1430,9 +1524,21 @@ def resolve_input_path(path_text: str) -> Path:
     raise typer.BadParameter(f"Missing file: {path_text}")
 
 
+def resolve_optional_input_path(path_text: str, *, root_candidates: list[Path] | None = None) -> Path:
+    candidate = Path(path_text).expanduser()
+    possible_paths = [candidate]
+    if not candidate.is_absolute():
+        possible_paths.extend(base / candidate for base in (root_candidates or [ROOT, REPO_ROOT]))
+    for path in possible_paths:
+        if path.exists():
+            return path.resolve()
+    return ((root_candidates or [ROOT])[0] / candidate).resolve()
+
+
 def build_source_adapter_registry(github_repo: str | None = None) -> SourceAdapterRegistry:
     registry = SourceAdapterRegistry()
     registry.register(FileSourceAdapter(DATA_DIR / "raw_sources"))
+    registry.register(DailyReportSourceAdapter(DAILY_REPORTS_DIR))
     registry.register(
         UnconfiguredSourceAdapter(
             "slack",
@@ -2047,6 +2153,8 @@ def source_rule_map(name: str) -> dict[str, list[str]]:
 
 def detect_source_type(path: Path, text: str) -> str:
     lowered = f"{path.name} {text[:200]}".lower()
+    if "daily_report:" in str(path) or "daily report" in lowered:
+        return "daily_report"
     source_type_keywords = source_rule_map("source_type_keywords")
     for source_type, keywords in source_type_keywords.items():
         if any(keyword.lower() in lowered for keyword in keywords):
@@ -2071,6 +2179,79 @@ def extract_source_date(path: Path, text: str, fallback: str = "") -> str:
     if path.exists():
         return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d")
     return datetime.now().strftime("%Y-%m-%d")
+
+
+def detect_date_string(value: str) -> str | None:
+    if not value:
+        return None
+    for pattern in [
+        r"(20\d{2})[-_/](\d{1,2})[-_/](\d{1,2})",
+        r"(20\d{2})(\d{2})(\d{2})",
+        r"(20\d{2})年(\d{1,2})月(\d{1,2})日",
+    ]:
+        match = re.search(pattern, value)
+        if not match:
+            continue
+        year, month, day = match.group(1), match.group(2), match.group(3)
+        try:
+            return date(int(year), int(month), int(day)).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
+def detect_daily_report_date(
+    path: Path,
+    raw_text: str,
+    content_text: str,
+    frontmatter: dict[str, Any],
+    *,
+    fallback: str = "",
+) -> str:
+    frontmatter_date = frontmatter.get("date")
+    if isinstance(frontmatter_date, (date, datetime)):
+        return frontmatter_date.strftime("%Y-%m-%d")
+    if isinstance(frontmatter_date, str):
+        detected = detect_date_string(frontmatter_date)
+        if detected:
+            return detected
+
+    candidates = [path.name, path.stem]
+    lines = content_text.splitlines()
+    heading_line = next((line.strip() for line in lines if line.strip().startswith("#")), "")
+    first_content_line = next((line.strip() for line in lines if line.strip()), "")
+    candidates.extend([heading_line, first_content_line, raw_text[:120], fallback])
+    for candidate in candidates:
+        detected = detect_date_string(str(candidate))
+        if detected:
+            return detected
+
+    if path.exists():
+        return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d")
+    if fallback:
+        detected = detect_date_string(fallback)
+        if detected:
+            return detected
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def infer_daily_report_kind(path: Path, frontmatter: dict[str, Any], content: str) -> str:
+    type_value = frontmatter.get("type")
+    if isinstance(type_value, str) and type_value.strip():
+        return type_value.strip()
+
+    lowered = f"{path.name}\n{content[:400]}".lower()
+    keyword_map = {
+        "daily": ["daily", "日報", "今日やったこと"],
+        "weekly": ["weekly", "週次"],
+        "worklog": ["worklog", "作業ログ", "作業メモ"],
+        "retrospective": ["retrospective", "ふりかえり", "振り返り", "kpt"],
+        "memo": ["memo", "note", "メモ"],
+    }
+    for kind, keywords in keyword_map.items():
+        if any(keyword in lowered for keyword in keywords):
+            return kind
+    return "freestyle_report"
 
 
 def split_source_lines(text: str) -> list[str]:
@@ -2103,7 +2284,7 @@ def has_work_signal(text: str) -> bool:
     category_keywords = source_rule_map("category_keywords")
     if any(keyword.lower() in lowered for keywords in category_keywords.values() for keyword in keywords):
         return True
-    if re.search(r"(やった|進めた|進行|対応|実施|修正|見直し|見直した|分離|整理|決めた|決定|受けた|もらった)", text):
+    if re.search(r"(やった|進めた|進行|対応|実施|修正|見直し|見直した|分離|整理|決めた|決定|受けた|もらった|追加|追加した|試した)", text):
         return True
     return False
 
@@ -2156,6 +2337,8 @@ def collect_focus_terms(text: str, tags: list[str]) -> list[str]:
     inferred_terms = [
         ("Resolver", "resolver"),
         ("GraphQL", "graphql"),
+        ("Connector", "connector"),
+        ("Slack", "slack"),
         ("schema", "schema"),
         ("Fragment", "fragment"),
     ]
@@ -2176,6 +2359,8 @@ def build_subject_phrase(text: str, tags: list[str]) -> str:
         return ""
     if "GraphQL" in focus_terms and "Resolver" in focus_terms:
         return "GraphQL Resolver"
+    if "Slack" in focus_terms and "Connector" in focus_terms:
+        return "Slack Connector"
     return " / ".join(focus_terms[:2])
 
 
@@ -2196,6 +2381,11 @@ def canonicalize_action(text: str, *, category: str, tags: list[str], tools: lis
 
     if is_low_signal_line(text, tags=tags, tools=tools):
         return None
+    if "指摘" in text and re.search(r"(受けた|もらった|反映)", text):
+        prefix = "PRレビューで" if has_pr else ""
+        if "設計" in text:
+            return f"{prefix}設計指摘を受領"
+        return f"{prefix}レビュー指摘を受領"
     if "分離" in text:
         if subject:
             return f"{subject}分離を実施"
@@ -2206,11 +2396,6 @@ def canonicalize_action(text: str, *, category: str, tags: list[str], tools: lis
         if subject:
             return f"{subject}の方針を決定"
         return "実装方針を決定"
-    if "指摘" in text and re.search(r"(受けた|もらった|反映)", text):
-        prefix = "PRレビューで" if has_pr else ""
-        if "設計" in text:
-            return f"{prefix}設計指摘を受領"
-        return f"{prefix}レビュー指摘を受領"
     if "レビュー" in text and re.search(r"(受けた|もらった|実施)", text):
         if has_pr:
             return "PRレビューを実施"
@@ -2348,9 +2533,8 @@ def build_canonical_event_from_raw_source(raw_source: RawSource) -> dict[str, An
         default=("communication", 0),
     )[0]
     summary = actions[0] if actions else "作業上有意な技術イベントを抽出できなかった"
-    if raw_source.source_type in {"github", "slack", "teams"}:
-        evidence_basis = " / ".join(dedupe_preserving_order(actions[:3] + decisions[:2] + improvements[:2]))
-    else:
+    evidence_basis = " / ".join(dedupe_preserving_order(actions[:3] + decisions[:2] + improvements[:2]))
+    if not evidence_basis and raw_source.source_type not in {"github", "slack", "teams", "daily_report"}:
         evidence_basis = " / ".join(kept_lines[:3]) if kept_lines else "有意な技術イベントなし"
     if not evidence_basis:
         evidence_basis = "有意な技術イベントなし"
@@ -2546,6 +2730,37 @@ def normalize_source_file(file_path: str | Path) -> Path:
 def normalize_all_sources() -> list[Path]:
     adapter = build_source_adapter_registry().get("file")
     return normalize_raw_sources(adapter.discover(), action_label="normalize-sources")
+
+
+def daily_report_root_for_file(path: Path) -> Path:
+    resolved = path.resolve()
+    reports_root = DAILY_REPORTS_DIR.resolve()
+    try:
+        resolved.relative_to(reports_root)
+        return reports_root
+    except ValueError:
+        return resolved.parent
+
+
+def inspect_daily_report_file(file_path: str | Path) -> RawSource:
+    resolved = resolve_input_path(str(file_path))
+    adapter = DailyReportSourceAdapter(daily_report_root_for_file(resolved))
+    return adapter._build_raw_source(resolved)
+
+
+def normalize_daily_report_file(file_path: str | Path) -> Path:
+    raw_source = inspect_daily_report_file(file_path)
+    output_paths = normalize_raw_sources([raw_source], action_label="import-daily-report")
+    return output_paths[0]
+
+
+def normalize_daily_reports_dir(directory: str | Path, limit: int | None = None) -> list[Path]:
+    resolved_dir = resolve_optional_input_path(
+        str(directory),
+        root_candidates=[ROOT, REPO_ROOT],
+    )
+    adapter = DailyReportSourceAdapter(resolved_dir, limit=limit)
+    return normalize_raw_sources(adapter.discover(), action_label="import-daily-reports")
 
 
 def normalize_github_sources(repo: str, limit: int = 20, command_runner: CommandRunner | None = None) -> list[Path]:
@@ -2783,6 +2998,47 @@ def inspect_github_source(
         typer.echo(f"  origin: {source.origin}")
 
 
+@app.command("inspect-daily-report")
+def inspect_daily_report(
+    file: str = typer.Option(..., "--file", "-f", help="Daily report markdown or text file"),
+) -> None:
+    """Inspect one daily report as a raw source."""
+    try:
+        source = inspect_daily_report_file(file)
+    except SourceAdapterError as exc:
+        typer.echo(f"Daily report inspection failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo("adapter: daily_report")
+    typer.echo(f"id: {source.id}")
+    typer.echo(f"title: {source.title}")
+    typer.echo(f"origin: {source.origin}")
+    typer.echo(f"detected_date: {source.metadata.get('detected_date', source.captured_at)}")
+
+
+@app.command("inspect-daily-reports")
+def inspect_daily_reports(
+    dir: str = typer.Option(str(DAILY_REPORTS_DIR), "--dir", help="Directory that stores daily reports"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of reports to inspect"),
+) -> None:
+    """Inspect daily reports under a directory as raw sources."""
+    reports_dir = resolve_optional_input_path(dir, root_candidates=[ROOT, REPO_ROOT])
+    adapter = DailyReportSourceAdapter(reports_dir=reports_dir, limit=limit)
+    try:
+        sources = adapter.discover()
+    except SourceAdapterError as exc:
+        typer.echo(f"Daily report inspection failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"adapter: {adapter.name}")
+    typer.echo(f"reports_dir: {display_path(reports_dir)}")
+    typer.echo(f"discovered_sources: {len(sources)}")
+    for source in sources:
+        typer.echo(f"- id: {source.id}")
+        typer.echo(f"  title: {source.title}")
+        typer.echo(f"  origin: {source.origin}")
+
+
 @app.command("inspect-slack-source")
 def inspect_slack_source(
     channel: str = typer.Option(..., "--channel", help="Slack channel ID"),
@@ -2864,6 +3120,40 @@ def normalize_github_source(
         typer.echo("No GitHub pull requests found.")
         return
     typer.echo(f"Normalized {len(output_paths)} day files from GitHub")
+    for path in output_paths:
+        typer.echo(f"- {path.relative_to(ROOT)}")
+
+
+@app.command("import-daily-report")
+def import_daily_report(
+    file: str = typer.Option(..., "--file", "-f", help="Daily report markdown or text file"),
+) -> None:
+    """Normalize one daily report into canonical event markdown."""
+    try:
+        output_path = normalize_daily_report_file(file)
+    except SourceAdapterError as exc:
+        typer.echo(f"Daily report import failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Imported daily report: {output_path.relative_to(ROOT)}")
+
+
+@app.command("import-daily-reports")
+def import_daily_reports(
+    dir: str = typer.Option(str(DAILY_REPORTS_DIR), "--dir", help="Directory that stores daily reports"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of reports to import"),
+) -> None:
+    """Normalize daily reports under a directory into canonical event markdown."""
+    try:
+        output_paths = normalize_daily_reports_dir(dir, limit=limit)
+    except SourceAdapterError as exc:
+        typer.echo(f"Daily report import failed: {exc}", err=True)
+        raise typer.Exit(1)
+
+    if not output_paths:
+        typer.echo("No daily reports found.")
+        return
+    typer.echo(f"Imported {len(output_paths)} day files from daily reports")
     for path in output_paths:
         typer.echo(f"- {path.relative_to(ROOT)}")
 
