@@ -96,6 +96,10 @@ uv run me-shower inspect-source-timeline --from 2026-07-01 --to 2026-07-31 --min
 uv run me-shower build-review-queue
 uv run me-shower inspect-review-queue --readiness ready_for_review --limit 20
 
+# Human Review の判断を追記・確認（実行例は安全なローカル参照のみ）
+uv run me-shower add-review-decision --source-sync-file app/data/source_sync/2026-07-10.md --event-index 1 --status approved --reviewer-id self --reason "Evidence is traceable and the meaning is acceptable." --evidence-ref "daily_report:2026-07-10.md"
+uv run me-shower inspect-review-decisions --status approved --limit 20
+
 # Slack source を inspect
 uv run me-shower inspect-slack-source --channel C0123456789 --limit 20 --token-env SLACK_BOT_TOKEN
 
@@ -182,6 +186,10 @@ Timeline item を CLI で確認します。`--from` / `--to` / `--source-type` /
 ### `uv run me-shower build-review-queue` / `inspect-review-queue`
 
 Review Queue is a generated worklist for Human Review. It is not Career Knowledge. It does not approve or reject candidates, and it does not mutate `source_sync`. Queue は再生成可能な derived output であり、手編集や source of truth としての利用を前提にしません。
+
+### `uv run me-shower add-review-decision` / `inspect-review-decisions`
+
+Canonical Event に対する Human Review の結果を `app/data/review_decisions/YYYY-MM-DD.jsonl` へ追記し、status・source ID・review date・件数で確認します。Decision Log は append-only な判断履歴であり、Review Queue、Source、Career Knowledge、`CHANGELOG.md` の代替ではありません。過去の行は編集・削除せず、判断が変わった場合も新しい decision を追加します。`approved` でも Career Knowledge Store には保存しません。
 
 ### `uv run me-shower inspect-daily-report`
 

@@ -11,6 +11,115 @@ from typer.testing import CliRunner
 runner = CliRunner()
 
 
+def review_decision(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "source_sync_file": "2026-07-10.md",
+        "source_id": "daily_report:2026-07-10.md",
+        "event_index": 1,
+        "event_date": "2026-07-10",
+        "status": "approved",
+        "reviewer_id": "self",
+        "reviewed_at": "2026-07-12T10:00:00+09:00",
+        "reason": "Evidence is traceable and the meaning is acceptable.",
+        "evidence_refs": ["daily_report:2026-07-10.md"],
+    }
+    values.update(overrides)
+    return main.create_review_decision(**values)  # type: ignore[arg-type]
+
+
+def test_review_decision_approved_appends_with_unique_ids(tmp_path: Path) -> None:
+    first = review_decision()
+    second = review_decision(status="needs_more_evidence", evidence_refs=[])
+    assert first["decision_id"] != second["decision_id"]
+
+    path = main.append_review_decision(first, decision_log_dir=tmp_path)
+    main.append_review_decision(second, decision_log_dir=tmp_path)
+
+    assert path.name == "2026-07-12.jsonl"
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 2
+
+
+@pytest.mark.parametrize("status", ["rejected", "deferred", "needs_more_evidence"])
+def test_review_decision_requires_reason_for_every_non_approved_status(status: str) -> None:
+    with pytest.raises(ValueError, match="reason"):
+        review_decision(status=status, reason="", evidence_refs=[])
+
+
+def test_review_decision_approved_requires_evidence_and_rejects_invalid_status() -> None:
+    with pytest.raises(ValueError, match="evidence_ref"):
+        review_decision(evidence_refs=[])
+    with pytest.raises(ValueError, match="status must be one of"):
+        review_decision(status="ready_for_review")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("reason", "API_KEY=super-secret-value"),
+    ("notes", "See https://private.example.invalid/item"),
+])
+def test_review_decision_rejects_unsafe_free_text(field: str, value: str) -> None:
+    with pytest.raises(ValueError, match="must not contain"):
+        review_decision(**{field: value})
+
+
+def test_review_decision_cli_inspects_status_source_id_and_limit_without_mutating_inputs(tmp_path: Path) -> None:
+    decision_dir = tmp_path / "review_decisions"
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    source_sync = source_sync_dir / "2026-07-10.md"
+    review_queue = tmp_path / "review_queue.jsonl"
+    review_queue.write_text("queue\n", encoding="utf-8")
+    before = (source_sync.read_bytes(), review_queue.read_bytes())
+    common = ["--decision-log-dir", str(decision_dir), "--source-sync-file", str(source_sync),
+              "--event-index", "1", "--reviewer-id", "self"]
+    approved = runner.invoke(main.app, ["add-review-decision", *common,
+        "--status", "approved", "--reason", "Supported.", "--evidence-ref", "file:one"])
+    rejected = runner.invoke(main.app, ["add-review-decision", *common,
+        "--status", "rejected", "--reason", "Out of scope."])
+    assert approved.exit_code == rejected.exit_code == 0
+
+    result = runner.invoke(main.app, ["inspect-review-decisions", "--decision-log-dir", str(decision_dir),
+        "--status", "approved", "--source-id", "daily_report:2026-07-10.md", "--limit", "1"])
+    assert result.exit_code == 0
+    assert "items: 1" in result.stdout
+    assert "daily_report:2026-07-10.md" in result.stdout
+    assert before == (source_sync.read_bytes(), review_queue.read_bytes())
+
+    stored = main.read_review_decisions(decision_dir)
+    assert stored[0]["canonical_event_ref"]["source_id"] == "daily_report:2026-07-10.md"
+    assert stored[0]["canonical_event_ref"]["event_date"] == "2026-07-10"
+
+
+@pytest.mark.parametrize(
+    "source_file,event_index,extra_args,error_text",
+    [
+        ("missing.md", 1, [], "Missing file"),
+        ("2026-07-10.md", 99, [], "event_index 99 does not exist"),
+        ("2026-07-10.md", 1, ["--source-id", "daily_report:wrong.md"], "source_id does not match"),
+        ("2026-07-10.md", 1, ["--event-date", "2026-07-11"], "event_date does not match"),
+    ],
+)
+def test_review_decision_cli_rejects_invalid_canonical_event_without_writing_jsonl(
+    tmp_path: Path, source_file: str, event_index: int, extra_args: list[str], error_text: str,
+) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    source_path = source_sync_dir / source_file
+    decision_dir = tmp_path / "review_decisions"
+    original = {path.name: path.read_bytes() for path in source_sync_dir.glob("*.md")}
+
+    result = runner.invoke(main.app, [
+        "add-review-decision", "--decision-log-dir", str(decision_dir),
+        "--source-sync-file", str(source_path), "--event-index", str(event_index),
+        "--status", "needs_more_evidence", "--reviewer-id", "self",
+        "--reason", "Need stronger Evidence.", *extra_args,
+    ])
+
+    assert result.exit_code != 0
+    assert error_text in result.output
+    assert not decision_dir.exists() or not list(decision_dir.glob("*.jsonl"))
+    assert original == {path.name: path.read_bytes() for path in source_sync_dir.glob("*.md")}
+
+
 def build_command_runner(fixtures: dict[tuple[str, ...], main.CommandResult]):
     def runner(command: list[str]) -> main.CommandResult:
         key = tuple(command)

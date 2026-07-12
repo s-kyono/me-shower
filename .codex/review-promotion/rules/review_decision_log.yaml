@@ -1,0 +1,40 @@
+version: review_decision_log_v0_4
+description: Append-only Human Review decision history for Canonical Events.
+
+log_role:
+  source_of_truth_for_review_decisions: true
+  source_of_truth_for_career_knowledge: false
+  source_input: false
+  mutates_source_sync: false
+  mutates_review_queue: false
+  creates_career_knowledge: false
+
+decision_statuses:
+  approved:
+    requires: [canonical_event_ref, reviewer_id, reviewed_at, reason, evidence_refs]
+  rejected:
+    requires: [canonical_event_ref, reviewer_id, reviewed_at, reason]
+  deferred:
+    requires: [canonical_event_ref, reviewer_id, reviewed_at, reason]
+  needs_more_evidence:
+    requires: [canonical_event_ref, reviewer_id, reviewed_at, reason]
+
+append_only:
+  overwrite_existing_decisions: false
+  delete_existing_decisions: false
+  later_changes_require_new_decision: true
+
+safety:
+  no_raw_source_content: true
+  no_secret_values: true
+  no_private_urls: true
+  no_confidential_content: true
+
+future_connections:
+  promotion_decision_record_v0_5:
+    - accepted_meaning
+    - event_fingerprint
+    - reviewed_evidence_refs
+    - semantic_review
+    - safety_review
+    - supersession

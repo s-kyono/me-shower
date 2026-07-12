@@ -8,6 +8,12 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Review Decision Log MVP
+  - Adds an append-only Human Review decision log for Canonical Events.
+  - Adds `approved`, `rejected`, `deferred`, and `needs_more_evidence` decision records.
+  - Keeps Review Decision Log separate from Career Knowledge and Review Queue.
+  - Requires reasons for all decisions and Evidence references for approved decisions.
+
 - Review Queue derived worklist
   - Adds a generated review worklist for Canonical Events awaiting Human Review.
   - Defines readiness statuses separate from Promotion Decision statuses.
