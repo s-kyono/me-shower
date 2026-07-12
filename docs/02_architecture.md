@@ -21,9 +21,13 @@ Canonical Event
     ↓
 source_sync
     ↓
-Review / Promotion Boundary
+Review Queue
     ↓
-Career Knowledge
+Human Review
+    ↓
+Review Decision Log
+    ↓
+Career Knowledge Store
     ↓
 Views
 ```
@@ -104,6 +108,10 @@ A generated worklist derived directly from Canonical Events in `source_sync`. It
 
 An append-only durable history of Human Review decisions about Canonical Events. The Canonical Event reference is primary and a Review Queue `queue_id` is optional context. It does not mutate Source or Review Queue and does not create Career Knowledge; an `approved` record remains only a future promotion candidate in v0.4.0.
 
+### Career Knowledge Store
+
+The future durable source of truth for reviewed Career Knowledge, stored under `app/data/career_knowledge/`. It stores future `accepted_meaning` and safe, traceable Evidence references, not a complete Canonical Event or Review Decision Log record. In v0.4.0 only the directory and contract exist: approved decisions are not automatically persisted and no entries are created.
+
 ### Review / Promotion Boundary
 
 The persistence gate between `source_sync` and Career Knowledge. It applies Promotion Criteria and requires Human Review before a Canonical Event can become durable knowledge. Source Confidence can prioritize and inform this review, but even `high` confidence cannot bypass it.
@@ -165,7 +173,7 @@ flowchart TD
     G --> P[Review Queue]
     P --> J[Human Review / Promotion Boundary]
     J --> Q[Review Decision Log]
-    Q -.->|future approved promotion| K[Career Knowledge]
+    Q -.->|future accepted meaning| K[Career Knowledge Store]
     Q -->|rejected / deferred / needs more evidence| N[Non-promoted decision]
     K --> L[Resume View]
     K --> M[Portfolio View]
@@ -180,6 +188,7 @@ RawSource: transient adapter output
 source_sync: canonical event store
 Review / Promotion Boundary: human-reviewed persistence gate
 Career Knowledge: reviewed long-term knowledge
+Career Knowledge Store: durable store for accepted meaning; boundary only in v0.4.0
 Source Timeline: derived view
 Resume: audience-specific view
 PDF: rendered artifact

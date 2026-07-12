@@ -25,8 +25,8 @@ GitHub often shows what changed. Slack and Teams often show what was discussed. 
 5. Timeline may be generated for chronological inspection
 6. Review Queue is generated as the Human Review worklist
 7. Human reviews candidate events against the Promotion Criteria
-8. A future Promotion Decision Log records the outcome
-9. Only approved events grow the future Career Knowledge Store
+8. Review Decision Log records the outcome
+9. A future persistence step writes accepted meaning to Career Knowledge Store
 10. Views are generated when needed
 ```
 
@@ -76,6 +76,14 @@ Future Career Knowledge Store
 Review Queue only organizes candidates and exposes missing Evidence, traceability, policy risks, and semantic concerns. Its readiness statuses are `ready_for_review`, `needs_evidence_before_review`, `blocked_by_policy`, and `needs_cleanup`. They are preparation states, never promotion outcomes. The Queue cannot create `approved`, `rejected`, `deferred`, or `needs_more_evidence`; those belong to the Review Decision Log.
 
 Review Decision Log is the append-only history of Human Review decisions about Canonical Events. It is not Source, Review Queue, Career Knowledge, or `CHANGELOG.md`. Even `approved` only records that the event may be treated as a future Career Knowledge candidate; it does not persist Career Knowledge in v0.4.0. Existing decisions are never overwritten or deleted. A changed judgment is recorded as a new decision; formal supersession belongs to PromotionDecisionRecord v0.5.0.
+
+## Operating Career Knowledge Store
+
+- An `approved` decision alone is not sufficient to write Career Knowledge in v0.4.0.
+- The Store accepts future `accepted_meaning` only, never an unprocessed copy of the complete Canonical Event.
+- Raw source, secrets, private URLs, confidential content, non-generalized internal names, AI inference, claim candidates, and generated output must not be stored.
+- Career Knowledge Entries reference the originating Review Decision instead of replacing or duplicating the Decision Log.
+- The Store must not be edited casually by hand. Persistence behavior will be designed after v0.5.0 PromotionDecisionRecord hardening introduces accepted meaning and the required review metadata.
 
 ## Career Knowledge Promotion Criteria
 
