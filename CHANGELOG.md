@@ -8,6 +8,12 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Career Knowledge Store boundary
+  - Defines the future storage boundary for reviewed Career Knowledge.
+  - Adds the Career Knowledge Store rule contract and storage directory placeholder.
+  - Clarifies that approved Review Decisions are not automatically persisted as Career Knowledge in v0.4.0.
+  - Defines accepted meaning as the future input to Career Knowledge Store.
+
 - Review Decision Log MVP
   - Adds an append-only Human Review decision log for Canonical Events.
   - Adds `approved`, `rejected`, `deferred`, and `needs_more_evidence` decision records.

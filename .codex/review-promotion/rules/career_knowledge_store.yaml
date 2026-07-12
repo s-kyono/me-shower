@@ -1,0 +1,89 @@
+version: career_knowledge_store_v0_4
+description: Defines the future store for reviewed Career Knowledge.
+
+store_role:
+  source_of_truth_for_career_knowledge: true
+  source_input: false
+  review_queue: false
+  review_decision_log: false
+  generated_output: false
+  resume_view: false
+
+storage:
+  directory: app/data/career_knowledge
+  add_real_entries_in_this_pr: false
+  allow_gitkeep_only: true
+
+allowed_inputs:
+  future_accepted_meaning: true
+  approved_review_decision_reference: true
+  traceable_evidence_refs: true
+
+forbidden_inputs:
+  raw_source_content: true
+  secret_values: true
+  private_urls: true
+  confidential_content: true
+  internal_names_not_generalized: true
+  ai_inference: true
+  claim_candidate: true
+  resume_overstatement: true
+  generated_resume: true
+  generated_pdf: true
+  review_queue_item: true
+  review_decision_log_record_as_knowledge: true
+  full_canonical_event_copy: true
+
+entry_contract:
+  schema_version: career_knowledge_v0_4
+  required_future_fields:
+    - knowledge_id
+    - source_decision_ref
+    - canonical_event_ref
+    - accepted_meaning
+    - evidence_refs
+    - created_at
+  draft_fields:
+    source_decision_ref:
+      - decision_id
+      - reviewed_at
+    canonical_event_ref:
+      - source_sync_file
+      - source_id
+      - event_index
+      - event_date
+    accepted_meaning:
+      - summary
+      - actions
+      - decisions
+      - improvements
+      - tags
+    knowledge_type_candidates:
+      - implementation
+      - decision
+      - improvement
+      - learning
+      - strength
+    status_candidates:
+      - active
+      - superseded
+      - archived
+
+current_scope:
+  define_store_boundary: true
+  create_storage_directory: true
+  create_actual_entries: false
+  migrate_approved_decisions: false
+  generate_views: false
+
+future_connections:
+  v0_5_promotion_decision_record:
+    - accepted_meaning
+    - event_fingerprint
+    - structured_reviewed_evidence_refs
+    - semantic_review
+    - safety_review
+  later_career_knowledge_persistence:
+    - append_or_upsert_entry
+    - inspect_career_knowledge
+    - extract_approved_decisions

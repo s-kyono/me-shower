@@ -26,6 +26,12 @@ Career Knowledge
 Views
 ```
 
+## Career Knowledge Store
+
+Career Knowledge Store is the future source of truth for reviewed Career Knowledge. It is downstream of Human Review and Review Decision Log and stores only the meaning a human accepted, supported by safe and traceable Evidence references.
+
+It does not store raw Canonical Events, Source, Review Queue items, Review Decision Log records as knowledge, Resume wording, or generated output. In v0.4.0, `app/data/career_knowledge/` is only an empty storage boundary; no approved decision is automatically persisted because the current decision record does not yet contain `accepted_meaning`.
+
 ## Source
 
 Source is a work trace.
