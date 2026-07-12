@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [v0.3.0] - 2026-07-12
+
+### Added
+
+- Source Intelligence pipeline from work traces to reviewable Canonical Events
+  - Adds the common Source Adapter and `RawSource` model.
+  - Adds GitHub, Slack, Teams, Daily Report, and file-based source ingestion.
+  - Adds Evidence Guard and Noisy Input Normalization before persistence to `source_sync`.
+  - Adds Source Confidence as an operational signal for evidence and extraction quality.
+  - Adds Source Timeline as a derived inspection view rather than a source of truth.
+  - Adds canonical concept, architecture, and operating-model documentation for Source Intelligence boundaries.
+
 ## [v0.2.0] - 2026-07-09
 
 ### Added
