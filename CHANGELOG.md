@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [v0.4.0] - 2026-07-12
+
+### Added
+
+- Promotion Criteria for Review & Promotion
+  - Defines the boundary between Canonical Event and reviewed Career Knowledge.
+  - Adds Promotion Decision statuses: `approved`, `rejected`, `deferred`, and `needs_more_evidence`.
+  - Adds `.codex/review-promotion/rules/promotion_criteria.yaml` as the minimum rule contract for future Review Queue, Decision Log, and Career Knowledge Store work.
+  - Clarifies that Source Confidence does not replace Human Review.
+  - Clarifies that AI inference and claim candidates must not be persisted as observed facts.
+  - Clarifies that Resume readiness must not override failed promotion checks.
+
 ## [v0.3.0] - 2026-07-12
 
 ### Added

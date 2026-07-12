@@ -23,8 +23,8 @@ GitHub often shows what changed. Slack and Teams often show what was discussed. 
 3. Source Intelligence normalizes them
 4. Canonical Events are stored in source_sync
 5. Timeline is generated for inspection
-6. Human reviews important events
-7. Reviewed events grow Career Knowledge
+6. Human reviews candidate events against the Promotion Criteria
+7. Only approved events grow Career Knowledge
 8. Views are generated when needed
 ```
 
@@ -57,7 +57,43 @@ Human reviews.
 Career Knowledge persists.
 ```
 
-Even if a full review queue is not yet implemented in v0.3.0, this boundary should already be treated as fixed.
+Even if a full review queue is not yet implemented, this boundary should already be treated as fixed.
+
+## Career Knowledge Promotion Criteria
+
+A Canonical Event is not Career Knowledge. When it is stored in `source_sync`, it is only a reviewable candidate. Promotion Criteria are not a score of how impressive the work is; they are the persistence gate for deciding whether the candidate is safe and useful as reviewed, long-term Career Knowledge.
+
+Promotion requires all of the following:
+
+1. Supporting Evidence exists.
+2. Source Confidence is `high` or `medium`; confidence never replaces Human Review, and `low` cannot be approved without stronger evidence and reassessment.
+3. A human has reviewed the candidate and accepted the meaning of its summary, actions, decisions, and improvements.
+4. Secrets, private URLs, confidential information, and sensitive internal names have been removed.
+5. `observed_fact`, `human_interpretation`, `ai_inference`, and `claim_candidate` remain distinguishable; AI inference is not stored as fact.
+6. The meaning has not been exaggerated or reshaped merely to improve a Resume or another View.
+7. The reviewer confirms career relevance: the event contributes to long-term understanding of the person's work, judgment, learning, improvement, or repeatable strengths.
+
+Career relevance is a retention decision, not a judgment that the work is prestigious or high-value. A routine event may be relevant, while an impressive-sounding but unsupported claim is not promotable.
+
+Promotion review produces exactly one status:
+
+- `approved`: all required checks pass; the accepted meaning may become Career Knowledge
+- `rejected`: the candidate must not become Career Knowledge, including unsupported or misleading claims
+- `deferred`: no current decision is appropriate, but the candidate may be reviewed later
+- `needs_more_evidence`: the candidate has potential relevance but lacks sufficient support for approval
+
+Only `approved` permits promotion. A failed required check must never be converted into approval because the wording is Resume-ready. `rejected`, `deferred`, and `needs_more_evidence` are valid outcomes, not errors to hide or auto-upgrade.
+
+The minimum decision model is defined in `.codex/review-promotion/rules/promotion_criteria.yaml`. It is a contract for future Review Queue, Decision Log, and Career Knowledge Store work, not a runtime validation engine in v0.4.0.
+
+## Log Responsibilities
+
+- `CHANGELOG.md`: project-level release and change history
+- `LOG.md`: design rationale, strict review results, and notes that connect to future improvements
+- `app/data/daily_reports/*.md`: daily work, interests, learning, and technology-stack summaries treated as Source input
+- future Review Decision Log: `approved`, `rejected`, `deferred`, and `needs_more_evidence` decisions for Canonical Events
+
+These records are not interchangeable. A Daily Report or Daily Digest is Source, not Career Knowledge. It must pass through Source Intelligence, Promotion Criteria, and Human Review before any accepted meaning can become Career Knowledge. `CHANGELOG.md` records project changes, not individual promotion decisions, and `.codex/steering_sheets/change_log.md` is not an official project log.
 
 ## Handling Generated Output
 

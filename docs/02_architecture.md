@@ -21,12 +21,14 @@ Canonical Event
     ↓
 source_sync
     ↓
+Review / Promotion Boundary
+    ↓
 Career Knowledge
     ↓
 Views
 ```
 
-The key rule in this flow is that views such as Resume or PDF must not come first. Source is structured into reviewable Canonical Events before Career Knowledge is grown, and only then are downstream views generated.
+The key rule in this flow is that views such as Resume or PDF must not come first. Source is structured into reviewable Canonical Events, stored as candidates in `source_sync`, and passed through the Review / Promotion Boundary before Career Knowledge is grown. Only then are downstream views generated.
 
 ## v0.3.0 Source Intelligence Flow
 
@@ -94,6 +96,12 @@ An operational signal attached to Canonical Events that reflects source strength
 
 A derived operational view generated from `source_sync`. It is useful for inspecting the flow of events over time, but it must not replace the event store.
 
+### Review / Promotion Boundary
+
+The persistence gate between `source_sync` and Career Knowledge. It applies Promotion Criteria and requires Human Review before a Canonical Event can become durable knowledge. Source Confidence can prioritize and inform this review, but even `high` confidence cannot bypass it.
+
+The boundary records one of `approved`, `rejected`, `deferred`, or `needs_more_evidence`. Only `approved` may flow into Career Knowledge. The other statuses retain the review outcome without treating the candidate as truth.
+
 ### Career Knowledge
 
 Reviewed long-term knowledge built from Canonical Events and supporting evidence. This is the durable core the system is trying to grow.
@@ -146,10 +154,12 @@ flowchart TD
     F --> G[source_sync]
     G --> H[Source Confidence]
     G --> I[Source Timeline]
-    G --> J[Career Knowledge]
-    J --> K[Resume View]
-    J --> L[Portfolio View]
-    J --> M[Interview Story View]
+    G --> J[Review / Promotion Boundary]
+    J -->|approved| K[Career Knowledge]
+    J -->|rejected / deferred / needs more evidence| N[Non-promoted decision]
+    K --> L[Resume View]
+    K --> M[Portfolio View]
+    K --> O[Interview Story View]
 ```
 
 ## Source of Truth Layers
@@ -158,6 +168,7 @@ flowchart TD
 Raw Source: external / local original
 RawSource: transient adapter output
 source_sync: canonical event store
+Review / Promotion Boundary: human-reviewed persistence gate
 Career Knowledge: reviewed long-term knowledge
 Source Timeline: derived view
 Resume: audience-specific view

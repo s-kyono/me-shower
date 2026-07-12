@@ -58,6 +58,17 @@ It is an intermediate representation that allows humans to inspect what happened
 
 Canonical Events accumulate in `source_sync`.
 
+A Canonical Event becomes Career Knowledge only after it passes the Promotion Criteria and Human Review. Source Confidence, appearance on the Source Timeline, or suitability for a Resume does not satisfy this boundary.
+
+Promotion review keeps the following meanings distinct:
+
+- `observed_fact`: what the supporting evidence directly shows
+- `human_interpretation`: meaning explicitly accepted by the reviewer
+- `ai_inference`: an AI-proposed interpretation that is not a fact
+- `claim_candidate`: wording that may later be used in a View if its support and scope are safe
+
+These categories may inform one another, but `ai_inference` and `claim_candidate` must not be persisted as `observed_fact`.
+
 ## source_sync
 
 `source_sync` is the Canonical Event Store.
@@ -65,6 +76,8 @@ Canonical Events accumulate in `source_sync`.
 In v0.3.0, it is closer to source-of-truth than downstream outputs such as Resume or PDF, but it is still not identical to reviewed Career Knowledge.
 
 It is the layer where normalized, reviewable fact candidates are accumulated before long-term knowledge promotion.
+
+The promotion boundary and its decision statuses are defined in [Operating Model](03_operating_model.md#career-knowledge-promotion-criteria), with the machine-readable minimum model in `.codex/review-promotion/rules/promotion_criteria.yaml`.
 
 ## Source Intelligence
 
