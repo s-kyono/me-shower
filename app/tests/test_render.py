@@ -115,43 +115,109 @@ def write_source_sync_fixture(source_sync_dir: Path) -> None:
     (source_sync_dir / "2026-07-11.md").write_text(
         "\n".join(
             [
-                "# Canonical Events",
-                "",
-                "date: 2026-07-11",
-                "",
-                "## Event 1",
-                "",
-                "- schema: canonical_event_v0_3",
-                "- date: 2026-07-11",
-                "  source_id: slack:C0123456789:1781736600.000100",
-                "  source_type: slack",
-                "  category: implementation",
-                "  summary: Slack Connector関連の実装・調査を実施",
-                "  actions:",
-                "  - Slack Connector関連の実装・調査を実施",
-                "  decisions:",
-                "  - none",
-                "  improvements:",
-                "  - none",
-                "  tags:",
-                "  - Slack",
-                "  - Connector",
-                "  tools:",
-                "  - none",
-                "  noise_removed:",
-                "  - none",
-                "  confidence: low",
-                "  confidence_reasons:",
-                "  - source_type:slack",
-                "  - actions:1",
-                "  evidence:",
-                "  - kind: source_reference",
-                "    detail: slack:C0123456789",
-                "",
+                "# Canonical Events", "", "date: 2026-07-11", "", "## Event 1", "",
+                "- schema: canonical_event_v0_3", "- date: 2026-07-11",
+                "  source_id: slack:C0123456789:1781736600.000100", "  source_type: slack",
+                "  category: implementation", "  summary: Slack Connector関連の実装・調査を実施",
+                "  actions:", "  - Slack Connector関連の実装・調査を実施", "  decisions:", "  - none",
+                "  improvements:", "  - none", "  tags:", "  - Slack", "  - Connector", "  tools:",
+                "  - none", "  noise_removed:", "  - none", "  confidence: low",
+                "  confidence_reasons:", "  - source_type:slack", "  - actions:1", "  evidence:",
+                "  - kind: source_reference", "    detail: slack:C0123456789", "",
             ]
         ),
         encoding="utf-8",
     )
+
+
+def test_review_queue_builds_from_source_sync_with_stable_ids_and_readiness(tmp_path: Path) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+
+    first = main.read_review_queue_items(source_sync_dir)
+    second = main.read_review_queue_items(source_sync_dir)
+
+    assert [item.queue_id for item in first] == [item.queue_id for item in second]
+    assert len(first) == 3
+    assert {item.readiness["status"] for item in first} <= main.REVIEW_READINESS_STATUSES
+    assert not ({item.readiness["status"] for item in first} & main.FORBIDDEN_REVIEW_QUEUE_STATUSES)
+    assert any(item.readiness["status"] == "ready_for_review" for item in first)
+    low_item = next(item for item in first if item.confidence["level"] == "low")
+    assert low_item.readiness["status"] != "ready_for_review"
+
+
+def test_review_queue_requires_evidence_and_blocks_sensitive_content(tmp_path: Path) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    path = source_sync_dir / "2026-07-10.md"
+    content = path.read_text(encoding="utf-8")
+    content = content.replace("detail: daily_report:2026-07-10.md", "detail: none", 1)
+    content = content.replace("PRレビューで設計指摘を受領", "contact@example.com の情報を確認")
+    path.write_text(content, encoding="utf-8")
+
+    items = main.read_review_queue_items(source_sync_dir)
+    missing = next(item for item in items if item.canonical_event_ref["event_index"] == 1 and item.canonical_event_ref["source_sync_file"] == "2026-07-10.md")
+    sensitive = next(item for item in items if item.canonical_event_ref["event_index"] == 2 and item.canonical_event_ref["source_sync_file"] == "2026-07-10.md")
+
+    assert missing.readiness["status"] == "needs_evidence_before_review"
+    assert sensitive.readiness["status"] == "blocked_by_policy"
+
+
+def test_build_review_queue_writes_safe_markdown_and_jsonl_without_mutating_source_sync(tmp_path: Path) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    path = source_sync_dir / "2026-07-10.md"
+    content = path.read_text(encoding="utf-8").replace(
+        "  - kind: source_reference\n    detail: daily_report:2026-07-10.md",
+        "  - kind: redacted_excerpt\n    detail: raw source secret phrase\n"
+        "  - kind: source_reference\n    detail: daily_report:2026-07-10.md",
+        1,
+    )
+    path.write_text(content + "\n", encoding="utf-8")
+    original = {item.name: item.read_bytes() for item in source_sync_dir.glob("*.md")}
+    output = tmp_path / "generated" / "review_queue.md"
+    jsonl_output = tmp_path / "generated" / "review_queue.jsonl"
+
+    markdown_path, jsonl_path, count = main.build_review_queue(
+        source_sync_dir=source_sync_dir, output_path=output, jsonl_output_path=jsonl_output
+    )
+
+    assert count == 3
+    assert markdown_path.exists() and jsonl_path == jsonl_output and jsonl_output.exists()
+    generated = markdown_path.read_text(encoding="utf-8") + jsonl_output.read_text(encoding="utf-8")
+    assert "Canonical Events" not in generated
+    assert "raw source secret phrase" not in generated
+    assert original == {item.name: item.read_bytes() for item in source_sync_dir.glob("*.md")}
+
+
+def test_review_queue_cli_filters_by_readiness_source_type_and_limit(tmp_path: Path) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+
+    result = runner.invoke(main.app, [
+        "inspect-review-queue", "--source-sync-dir", str(source_sync_dir),
+        "--readiness", "ready_for_review", "--source-type", "github", "--limit", "1",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert "items: 1" in result.output
+    assert "[ready_for_review]" in result.output
+
+
+def test_review_queue_cli_build_supports_date_filter(tmp_path: Path) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    output = tmp_path / "generated" / "review_queue.md"
+    jsonl = tmp_path / "generated" / "review_queue.jsonl"
+
+    result = runner.invoke(main.app, [
+        "build-review-queue", "--source-sync-dir", str(source_sync_dir), "--output", str(output),
+        "--jsonl-output", str(jsonl), "--from", "2026-07-11", "--to", "2026-07-11",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert "items: 1" in result.output
+    assert output.exists() and jsonl.exists()
 
 
 def test_load_resume_data_has_projects() -> None:

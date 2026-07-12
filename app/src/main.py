@@ -34,6 +34,8 @@ THEMES_DIR = TEMPLATE_DIR / "themes"
 GENERATED_DIR = ROOT / "generated"
 SOURCE_TIMELINE_PATH = GENERATED_DIR / "source_timeline.md"
 SOURCE_TIMELINE_JSONL_PATH = GENERATED_DIR / "source_timeline.jsonl"
+REVIEW_QUEUE_PATH = GENERATED_DIR / "review_queue.md"
+REVIEW_QUEUE_JSONL_PATH = GENERATED_DIR / "review_queue.jsonl"
 CHANGELOG_PATH = ROOT / "CHANGELOG.md"
 RELEASES_DIR = GENERATED_DIR / "releases"
 CODEX_DIR = REPO_ROOT / ".codex"
@@ -118,6 +120,25 @@ class SourceTimelineItem:
     evidence_details: list[str]
     source_sync_path: str
     event_index: int
+
+
+@dataclass(frozen=True)
+class ReviewQueueItem:
+    queue_id: str
+    canonical_event_ref: dict[str, Any]
+    source_type: str
+    summary: str
+    actions: list[str]
+    decisions: list[str]
+    improvements: list[str]
+    tags: list[str]
+    tools: list[str]
+    confidence: dict[str, Any]
+    evidence: dict[str, Any]
+    readiness: dict[str, Any]
+    semantic_risks: dict[str, bool]
+    review_focus: list[str]
+    review_questions: list[str]
 
 
 class SourceAdapterError(Exception):
@@ -2873,6 +2894,231 @@ def parse_source_sync_evidence_details(block: str) -> list[str]:
     return details
 
 
+def parse_source_sync_evidence(block: str) -> list[dict[str, str]]:
+    evidence: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    in_evidence = False
+    for line in block.splitlines():
+        if line == "  evidence:":
+            in_evidence = True
+            continue
+        if not in_evidence:
+            continue
+        if re.match(r"^  [a-z_]+:", line):
+            break
+        if line.startswith("  - kind: "):
+            if current:
+                evidence.append(current)
+            current = {"kind": line.removeprefix("  - kind: ").strip()}
+        elif current is not None and line.startswith("    detail: "):
+            current["detail"] = line.removeprefix("    detail: ").strip()
+    if current:
+        evidence.append(current)
+    return evidence
+
+
+REVIEW_READINESS_STATUSES = {
+    "ready_for_review",
+    "needs_evidence_before_review",
+    "blocked_by_policy",
+    "needs_cleanup",
+}
+FORBIDDEN_REVIEW_QUEUE_STATUSES = {"approved", "rejected", "deferred", "needs_more_evidence"}
+SAFE_EVIDENCE_KINDS = {"source_reference", "evidence_ref", "commit_reference", "pr_reference", "file_reference"}
+
+
+def _contains_sensitive_content(values: list[str]) -> bool:
+    for value in values:
+        _, findings = redact_sensitive_text(value)
+        if findings or "[REDACTED_" in value:
+            return True
+    return False
+
+
+def build_review_queue_item(block: str, *, path: Path, event_index: int) -> ReviewQueueItem:
+    event_date = parse_source_sync_scalar(block, "date") or path.stem
+    source_id = parse_source_sync_scalar(block, "source_id") or ""
+    source_type = parse_source_sync_scalar(block, "source_type") or (source_id.split(":", 1)[0] if source_id else "unknown")
+    summary = parse_source_sync_scalar(block, "summary") or ""
+    actions = parse_source_sync_list_field(block, "actions")
+    decisions = parse_source_sync_list_field(block, "decisions")
+    improvements = parse_source_sync_list_field(block, "improvements")
+    tags = parse_source_sync_list_field(block, "tags")
+    tools = parse_source_sync_list_field(block, "tools")
+    confidence_level = (parse_source_sync_scalar(block, "confidence") or "low").lower()
+    if confidence_level not in CONFIDENCE_ORDER:
+        confidence_level = "low"
+    confidence_reasons = parse_source_sync_list_field(block, "confidence_reasons")
+    confidence_score_raw = parse_source_sync_scalar(block, "confidence_score")
+    confidence_score = int(confidence_score_raw) if confidence_score_raw and confidence_score_raw.isdigit() else None
+    evidence = parse_source_sync_evidence(block)
+    safe_evidence = [
+        item for item in evidence
+        if item.get("kind") in SAFE_EVIDENCE_KINDS
+        and item.get("detail")
+        and item.get("detail", "").lower() != "none"
+        and not _contains_sensitive_content([item.get("detail", "")])
+    ]
+    evidence_refs = [item["detail"] for item in safe_evidence if item["kind"] != "source_reference"]
+    source_references = [item["detail"] for item in safe_evidence if item["kind"] == "source_reference"]
+    source_reference = source_references[0] if source_references else None
+
+    stable_ref = bool(path.name and event_index > 0 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_date))
+    structural_cleanup = not summary or source_type == "unknown" or not stable_ref
+    semantic_text = " ".join([summary, *actions, *decisions, *improvements]).lower()
+    ai_inference = "ai_inference" in block or "ai inference" in semantic_text
+    claim_candidate = "claim_candidate" in block or "claim candidate" in semantic_text
+    semantic_mixed = (ai_inference or claim_candidate) and "observed_fact" in block
+    confidential_risk = _contains_sensitive_content([summary, *actions, *decisions, *improvements, *tags, *tools])
+    missing_evidence = not (evidence_refs or source_reference)
+
+    reasons: list[str] = []
+    blocking_reasons: list[str] = []
+    if confidential_risk:
+        readiness_status = "blocked_by_policy"
+        blocking_reasons.append("confidential_or_raw_sensitive_content_risk")
+    elif structural_cleanup or semantic_mixed:
+        readiness_status = "needs_cleanup"
+        blocking_reasons.append("canonical_event_structure_or_semantic_separation_requires_cleanup")
+    elif missing_evidence:
+        readiness_status = "needs_evidence_before_review"
+        blocking_reasons.append("traceable_evidence_ref_or_safe_source_reference_is_missing")
+    elif confidence_level == "low":
+        readiness_status = "needs_evidence_before_review"
+        blocking_reasons.append("low_source_confidence_requires_stronger_evidence_and_reassessment")
+    else:
+        readiness_status = "ready_for_review"
+        reasons.append("stable_reference_traceable_evidence_and_acceptable_confidence_are_available")
+
+    semantic_risks = {
+        "ai_inference_present": ai_inference,
+        "claim_candidate_present": claim_candidate,
+        "confidential_risk": confidential_risk,
+        "resume_overstatement_risk": "resume" in semantic_text,
+        "low_confidence": confidence_level == "low",
+        "missing_evidence_ref": missing_evidence,
+    }
+    review_focus = [key for key, present in semantic_risks.items() if present]
+    if not review_focus:
+        review_focus = ["verify_event_meaning_against_evidence"]
+    review_questions = ["Does the safe Evidence support the event summary and structured fields?"]
+    if ai_inference or claim_candidate:
+        review_questions.append("Are observed facts separated from inference or claim wording?")
+
+    source_sync_file = path.name
+    identity = f"{source_sync_file}|{source_id}|{event_index}|{event_date}"
+    queue_id = "rq_" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    return ReviewQueueItem(
+        queue_id=queue_id,
+        canonical_event_ref={
+            "source_sync_file": source_sync_file,
+            "source_id": source_id or None,
+            "event_index": event_index,
+            "event_date": event_date,
+        },
+        source_type=source_type,
+        summary=summary,
+        actions=actions,
+        decisions=decisions,
+        improvements=improvements,
+        tags=tags,
+        tools=tools,
+        confidence={"level": confidence_level, "score": confidence_score, "reasons": confidence_reasons},
+        evidence={"evidence_refs": evidence_refs, "source_reference": source_reference, "traceability": bool(evidence_refs or source_reference)},
+        readiness={"status": readiness_status, "reasons": reasons, "blocking_reasons": blocking_reasons},
+        semantic_risks=semantic_risks,
+        review_focus=review_focus,
+        review_questions=review_questions,
+    )
+
+
+def read_review_queue_items(source_sync_dir: Path) -> list[ReviewQueueItem]:
+    items: list[ReviewQueueItem] = []
+    if not source_sync_dir.exists():
+        return items
+    for path in sorted(source_sync_dir.glob("*.md")):
+        _, blocks = read_source_sync_event_blocks(path)
+        items.extend(build_review_queue_item(block, path=path, event_index=index) for index, block in enumerate(blocks, 1))
+    return sorted(items, key=lambda item: (item.canonical_event_ref["event_date"], item.queue_id), reverse=True)
+
+
+def filter_review_queue_items(
+    items: list[ReviewQueueItem], *, from_date: str | None = None, to_date: str | None = None,
+    source_type: str | None = None, confidence: str | None = None, readiness: str | None = None,
+    limit: int | None = None,
+) -> list[ReviewQueueItem]:
+    filtered: list[ReviewQueueItem] = []
+    for item in items:
+        event_date = item.canonical_event_ref["event_date"]
+        if from_date and event_date < from_date:
+            continue
+        if to_date and event_date > to_date:
+            continue
+        if source_type and item.source_type.lower() != source_type.lower():
+            continue
+        if confidence and item.confidence["level"] != confidence.lower():
+            continue
+        if readiness and item.readiness["status"] != readiness.lower():
+            continue
+        filtered.append(item)
+        if limit is not None and len(filtered) >= limit:
+            break
+    return filtered
+
+
+def review_queue_item_dict(item: ReviewQueueItem) -> dict[str, Any]:
+    return {
+        "queue_id": item.queue_id, "canonical_event_ref": item.canonical_event_ref,
+        "source_type": item.source_type, "summary": item.summary, "actions": item.actions,
+        "decisions": item.decisions, "improvements": item.improvements, "tags": item.tags,
+        "tools": item.tools, "confidence": item.confidence, "evidence": item.evidence,
+        "readiness": item.readiness, "semantic_risks": item.semantic_risks,
+        "review_focus": item.review_focus, "review_questions": item.review_questions,
+    }
+
+
+def render_review_queue_jsonl(items: list[ReviewQueueItem]) -> str:
+    return "".join(json.dumps(review_queue_item_dict(item), ensure_ascii=False) + "\n" for item in items)
+
+
+def render_review_queue_markdown(items: list[ReviewQueueItem], *, source_sync_dir: Path) -> str:
+    lines = [
+        "# Review Queue", "",
+        "> Generated Human Review worklist. Not Career Knowledge or a Promotion Decision Log.", "",
+        f"Generated from `{display_path(source_sync_dir.resolve())}` without mutating it.", "",
+    ]
+    for item in items:
+        ref = item.canonical_event_ref
+        lines.extend([
+            f"## {item.queue_id} · {item.readiness['status']}", "",
+            f"**{item.summary}**", "",
+            f"- canonical_event_ref: `{ref['source_sync_file']}` Event {ref['event_index']} ({ref['event_date']})",
+            f"- source_type: `{item.source_type}`", f"- confidence: `{item.confidence['level']}`",
+            f"- safe evidence: {', '.join(item.evidence['evidence_refs']) or item.evidence['source_reference'] or 'none'}",
+            f"- blocking reasons: {', '.join(item.readiness['blocking_reasons']) or 'none'}",
+            f"- review focus: {', '.join(item.review_focus)}", "",
+        ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_review_queue(
+    *, source_sync_dir: Path = SOURCE_SYNC_DIR, output_path: Path = REVIEW_QUEUE_PATH,
+    jsonl_output_path: Path | None = REVIEW_QUEUE_JSONL_PATH, from_date: str | None = None,
+    to_date: str | None = None, source_type: str | None = None, confidence: str | None = None,
+    readiness: str | None = None, limit: int | None = None,
+) -> tuple[Path, Path | None, int]:
+    items = filter_review_queue_items(read_review_queue_items(source_sync_dir), from_date=from_date, to_date=to_date,
+        source_type=source_type, confidence=confidence, readiness=readiness, limit=limit)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(render_review_queue_markdown(items, source_sync_dir=source_sync_dir), encoding="utf-8")
+    written_jsonl: Path | None = None
+    if jsonl_output_path is not None:
+        jsonl_output_path.parent.mkdir(parents=True, exist_ok=True)
+        jsonl_output_path.write_text(render_review_queue_jsonl(items), encoding="utf-8")
+        written_jsonl = jsonl_output_path
+    return output_path, written_jsonl, len(items)
+
+
 def parse_source_sync_event_block(block: str, *, path: Path, event_index: int) -> SourceTimelineItem | None:
     event_date = parse_source_sync_scalar(block, "date") or path.stem
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_date):
@@ -3418,6 +3664,62 @@ def inspect_source_timeline(
         typer.echo(f"{item.date} [{item.confidence}] {item.source_type} {item.category}")
         typer.echo(f"- {item.summary}")
         typer.echo(f"  source_id: {item.source_id}")
+
+
+@app.command("build-review-queue")
+def build_review_queue_command(
+    source_sync_dir: str = typer.Option(str(SOURCE_SYNC_DIR), "--source-sync-dir", help="Directory that stores source_sync markdown files"),
+    output: str = typer.Option(str(REVIEW_QUEUE_PATH), "--output", help="Markdown output path"),
+    jsonl_output: str | None = typer.Option(str(REVIEW_QUEUE_JSONL_PATH), "--jsonl-output", help="Optional JSONL output path"),
+    from_date: str | None = typer.Option(None, "--from", help="Inclusive start date in YYYY-MM-DD"),
+    to_date: str | None = typer.Option(None, "--to", help="Inclusive end date in YYYY-MM-DD"),
+    source_type: str | None = typer.Option(None, "--source-type", help="Filter by source type"),
+    confidence: str | None = typer.Option(None, "--confidence", help="Filter by exact confidence"),
+    readiness: str | None = typer.Option(None, "--readiness", help="Filter by review readiness"),
+    limit: int | None = typer.Option(None, "--limit", min=1, help="Maximum number of items to build"),
+) -> None:
+    """Build a generated Human Review worklist from Canonical Events in source_sync."""
+    if readiness and readiness not in REVIEW_READINESS_STATUSES:
+        raise typer.BadParameter(f"readiness must be one of: {', '.join(sorted(REVIEW_READINESS_STATUSES))}")
+    source_dir = resolve_optional_input_path(source_sync_dir, root_candidates=[ROOT, REPO_ROOT])
+    output_path, jsonl_path, count = build_review_queue(
+        source_sync_dir=source_dir, output_path=resolve_output_path(output),
+        jsonl_output_path=resolve_output_path(jsonl_output) if jsonl_output else None,
+        from_date=from_date, to_date=to_date, source_type=source_type, confidence=confidence,
+        readiness=readiness, limit=limit,
+    )
+    typer.echo(f"Built review queue: {display_path(output_path)}")
+    typer.echo(f"items: {count}")
+    if jsonl_path:
+        typer.echo(f"JSONL: {display_path(jsonl_path)}")
+
+
+@app.command("inspect-review-queue")
+def inspect_review_queue(
+    source_sync_dir: str = typer.Option(str(SOURCE_SYNC_DIR), "--source-sync-dir", help="Directory that stores source_sync markdown files"),
+    from_date: str | None = typer.Option(None, "--from", help="Inclusive start date in YYYY-MM-DD"),
+    to_date: str | None = typer.Option(None, "--to", help="Inclusive end date in YYYY-MM-DD"),
+    source_type: str | None = typer.Option(None, "--source-type", help="Filter by source type"),
+    confidence: str | None = typer.Option(None, "--confidence", help="Filter by exact confidence"),
+    readiness: str | None = typer.Option(None, "--readiness", help="Filter by review readiness"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of items to show"),
+) -> None:
+    """Inspect the regenerated review worklist without creating review decisions."""
+    if readiness and readiness not in REVIEW_READINESS_STATUSES:
+        raise typer.BadParameter(f"readiness must be one of: {', '.join(sorted(REVIEW_READINESS_STATUSES))}")
+    source_dir = resolve_optional_input_path(source_sync_dir, root_candidates=[ROOT, REPO_ROOT])
+    items = filter_review_queue_items(
+        read_review_queue_items(source_dir), from_date=from_date, to_date=to_date,
+        source_type=source_type, confidence=confidence, readiness=readiness, limit=limit,
+    )
+    typer.echo("Review Queue (generated worklist; no promotion decisions)")
+    typer.echo(f"items: {len(items)}")
+    for item in items:
+        ref = item.canonical_event_ref
+        typer.echo("")
+        typer.echo(f"{item.queue_id} [{item.readiness['status']}] {ref['event_date']} {item.source_type}")
+        typer.echo(f"- {item.summary}")
+        typer.echo(f"  canonical_event_ref: {ref['source_sync_file']} Event {ref['event_index']}")
 
 
 @app.command("generate-md")

@@ -8,6 +8,12 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Review Queue derived worklist
+  - Adds a generated review worklist for Canonical Events awaiting Human Review.
+  - Defines readiness statuses separate from Promotion Decision statuses.
+  - Prevents Review Queue from approving, rejecting, mutating `source_sync`, or creating Career Knowledge.
+  - Adds review queue rules for traceability, confidence, confidentiality, and semantic risks.
+
 - Promotion Criteria for Review & Promotion
   - Defines the boundary between Canonical Event and reviewed Career Knowledge.
   - Adds Promotion Decision statuses: `approved`, `rejected`, `deferred`, and `needs_more_evidence`.

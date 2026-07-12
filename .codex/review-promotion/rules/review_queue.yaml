@@ -1,0 +1,37 @@
+version: review_queue_v0_4
+description: Derived review worklist for Canonical Events awaiting Human Review.
+
+queue_role:
+  source_of_truth: false
+  creates_promotion_decisions: false
+  creates_career_knowledge: false
+  mutates_source_sync: false
+
+readiness_statuses:
+  ready_for_review:
+    description: Candidate can be reviewed by a human, but is not approved.
+  needs_evidence_before_review:
+    description: Candidate lacks traceable Evidence or safe source reference.
+  blocked_by_policy:
+    description: Candidate contains policy, confidentiality, or raw sensitive content risk.
+  needs_cleanup:
+    description: Candidate requires normalization or semantic cleanup before review.
+
+forbidden_statuses:
+  - approved
+  - rejected
+  - deferred
+  - needs_more_evidence
+
+ready_for_review_requires:
+  - stable_canonical_event_ref
+  - high_or_medium_confidence
+  - traceable_evidence_ref
+  - no_confidential_risk
+  - no_raw_sensitive_content
+  - semantic_risks_are_visible
+
+output_policy:
+  generated_only: true
+  do_not_commit_generated_queue: true
+  no_raw_source_content: true
