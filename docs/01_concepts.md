@@ -23,6 +23,10 @@ Human Review
     ↓
 Career Knowledge
     ↓
+Claim Builder
+    ↓
+Claim Candidates
+    ↓
 Views
 ```
 
@@ -31,6 +35,18 @@ Views
 Career Knowledge Store is the future source of truth for reviewed Career Knowledge. It is downstream of Human Review and Review Decision Log and stores only the meaning a human accepted, supported by safe and traceable Evidence references.
 
 It does not store raw Canonical Events, Source, Review Queue items, Review Decision Log records as knowledge, Resume wording, or generated output. In v0.4.0, `app/data/career_knowledge/` is only an empty storage boundary; no approved decision is automatically persisted because the current decision record does not yet contain `accepted_meaning`.
+
+## Claim Builder
+
+Claim Builder is a future transformation layer between Career Knowledge and Views. It turns reviewed Career Knowledge and its accepted meaning into presentation candidates that may later be considered for a Resume, Portfolio, Interview Story, or another View.
+
+Claim Builder does not create or modify Career Knowledge, Source, Evidence, Review Decisions, or Resume output. It must not derive candidates directly from `source_sync`, Canonical Events, Review Queue items, Review Decision Log rows, or an `approved` decision alone. v0.4.0 defines only this boundary and a draft contract; it generates and persists no Claim Candidates.
+
+## Claim Candidate
+
+Claim Candidate is a candidate expression derived from Career Knowledge for possible use in a View. It is not truth, Source, Evidence, a Review Decision, Career Knowledge, Resume output, or another source of truth.
+
+A Claim Candidate requires Human Review or View Selection before use. Even `approved_for_view` means only that the candidate may be used in a particular View context; it is not Career Knowledge approval, Promotion approval, or Career Knowledge persistence.
 
 ## Source
 

@@ -8,6 +8,12 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Claim Builder boundary
+  - Defines Claim Builder as the future transformation layer from Career Knowledge to presentation candidates.
+  - Adds a Claim Candidate contract and rule boundary.
+  - Clarifies that Claim Candidates are not Career Knowledge, Resume output, or source of truth.
+  - Prevents direct Claim generation from `source_sync`, Review Decision Log rows, or approved decisions alone.
+
 - Career Knowledge Store boundary
   - Defines the future storage boundary for reviewed Career Knowledge.
   - Adds the Career Knowledge Store rule contract and storage directory placeholder.

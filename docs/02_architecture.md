@@ -29,7 +29,13 @@ Review Decision Log
     ↓
 Career Knowledge Store
     ↓
-Views
+Claim Builder
+    ↓
+Claim Candidates
+    ↓
+View Generation
+    ↓
+Resume / Portfolio / Interview Story
 ```
 
 The key rule in this flow is that views such as Resume or PDF must not come first. Source is structured into reviewable Canonical Events, stored as candidates in `source_sync`, and passed through the Review / Promotion Boundary before Career Knowledge is grown. Only then are downstream views generated.
@@ -112,6 +118,14 @@ An append-only durable history of Human Review decisions about Canonical Events.
 
 The future durable source of truth for reviewed Career Knowledge, stored under `app/data/career_knowledge/`. It stores future `accepted_meaning` and safe, traceable Evidence references, not a complete Canonical Event or Review Decision Log record. In v0.4.0 only the directory and contract exist: approved decisions are not automatically persisted and no entries are created.
 
+### Claim Builder
+
+A future transformation layer that derives presentation candidates only from reviewed Career Knowledge, `accepted_meaning`, safe Evidence references, and a validated PromotionDecisionRecord. It cannot create or modify Career Knowledge and cannot use `source_sync`, Canonical Events, Review Queue items, Review Decision Log rows, or an `approved` decision alone as direct input. v0.4.0 defines only its boundary and contract; it creates no candidates.
+
+### Claim Candidate
+
+A generated expression candidate for possible View use. It is not Career Knowledge, Resume output, or a source of truth, and it requires Human Review or View Selection before use. `approved_for_view` is View-scoped permission, not promotion or persistence approval.
+
 ### Review / Promotion Boundary
 
 The persistence gate between `source_sync` and Career Knowledge. It applies Promotion Criteria and requires Human Review before a Canonical Event can become durable knowledge. Source Confidence can prioritize and inform this review, but even `high` confidence cannot bypass it.
@@ -124,7 +138,7 @@ Reviewed long-term knowledge built from Canonical Events and supporting evidence
 
 ### View Generator
 
-Generates downstream outputs such as Resume, PDF, Portfolio summaries, or Interview Stories from Career Knowledge.
+Selects reviewed Claim Candidates and generates downstream outputs such as Resume, PDF, Portfolio summaries, or Interview Stories. View generation remains downstream of Career Knowledge and cannot make a Claim Candidate authoritative.
 
 ## Truth Boundary
 
@@ -145,6 +159,10 @@ The Canonical Event Store in v0.3.0. It accumulates Career Knowledge candidates,
 ### Career Knowledge
 
 Human-reviewed long-term knowledge. This is the main asset me-shower is meant to grow.
+
+### Claim Candidate
+
+A downstream presentation candidate derived from Career Knowledge. It is neither durable knowledge nor final View output.
 
 ### Source Timeline
 
@@ -175,9 +193,12 @@ flowchart TD
     J --> Q[Review Decision Log]
     Q -.->|future accepted meaning| K[Career Knowledge Store]
     Q -->|rejected / deferred / needs more evidence| N[Non-promoted decision]
-    K --> L[Resume View]
-    K --> M[Portfolio View]
-    K --> O[Interview Story View]
+    K --> R[Claim Builder]
+    R --> S[Claim Candidates]
+    S --> T[Human Review / View Selection]
+    T --> L[Resume View]
+    T --> M[Portfolio View]
+    T --> O[Interview Story View]
 ```
 
 ## Source of Truth Layers
@@ -189,6 +210,8 @@ source_sync: canonical event store
 Review / Promotion Boundary: human-reviewed persistence gate
 Career Knowledge: reviewed long-term knowledge
 Career Knowledge Store: durable store for accepted meaning; boundary only in v0.4.0
+Claim Builder: future transformation from Career Knowledge to presentation candidates; contract only in v0.4.0
+Claim Candidate: non-authoritative presentation candidate requiring review before View use
 Source Timeline: derived view
 Resume: audience-specific view
 PDF: rendered artifact

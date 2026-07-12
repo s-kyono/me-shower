@@ -20,6 +20,8 @@ me-shower は、仕事の痕跡・証跡・Human Review から Career Knowledge 
 
 Career Knowledge Store は、レビュー済み Career Knowledge を将来永続化する正本領域です。v0.4.0 では境界と `app/data/career_knowledge/` ディレクトリだけを定義し、`approved` の Review Decision を自動保存しません。将来の入力は Human Review で受理された `accepted_meaning` であり、Canonical Event 全体や generated output ではありません。
 
+Claim Builder は、レビュー済み Career Knowledge を View 向けの表現候補へ変換する将来レイヤーです。v0.4.0 では境界と Claim Candidate 契約だけを定義し、Claim、Resume、PDF、View の生成や永続化は行いません。Claim Candidate は Career Knowledge、Resume、source of truth のいずれでもなく、利用前に Human Review または View Selection が必要です。
+
 ## ディレクトリ構成
 
 ```text
