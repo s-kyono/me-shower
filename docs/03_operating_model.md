@@ -22,10 +22,12 @@ GitHub often shows what changed. Slack and Teams often show what was discussed. 
 2. Sources are collected
 3. Source Intelligence normalizes them
 4. Canonical Events are stored in source_sync
-5. Timeline is generated for inspection
-6. Human reviews candidate events against the Promotion Criteria
-7. Only approved events grow Career Knowledge
-8. Views are generated when needed
+5. Timeline may be generated for chronological inspection
+6. Review Queue is generated as the Human Review worklist
+7. Human reviews candidate events against the Promotion Criteria
+8. A future Promotion Decision Log records the outcome
+9. Only approved events grow the future Career Knowledge Store
+10. Views are generated when needed
 ```
 
 This sequence matters. me-shower should not jump directly from noisy inputs to Resume claims.
@@ -57,7 +59,21 @@ Human reviews.
 Career Knowledge persists.
 ```
 
-Even if a full review queue is not yet implemented, this boundary should already be treated as fixed.
+The review and promotion path is:
+
+```text
+source_sync
+  ↓
+Review Queue
+  ↓
+Human Review
+  ↓
+Future Promotion Decision Log
+  ↓
+Future Career Knowledge Store
+```
+
+Review Queue only organizes candidates and exposes missing Evidence, traceability, policy risks, and semantic concerns. Its readiness statuses are `ready_for_review`, `needs_evidence_before_review`, `blocked_by_policy`, and `needs_cleanup`. They are preparation states, never promotion outcomes. The Queue cannot create `approved`, `rejected`, `deferred`, or `needs_more_evidence`; those belong to the future Promotion Decision Log.
 
 ## Career Knowledge Promotion Criteria
 
