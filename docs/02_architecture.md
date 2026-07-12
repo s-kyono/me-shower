@@ -100,6 +100,10 @@ A derived operational view generated from `source_sync`. It is useful for inspec
 
 A generated worklist derived directly from Canonical Events in `source_sync`. It displays review readiness, safe Evidence references, and semantic risks so a human can begin review. It is neither Career Knowledge nor a Promotion Decision Log, creates no decision status, and never mutates `source_sync`.
 
+### Review Decision Log
+
+An append-only durable history of Human Review decisions about Canonical Events. The Canonical Event reference is primary and a Review Queue `queue_id` is optional context. It does not mutate Source or Review Queue and does not create Career Knowledge; an `approved` record remains only a future promotion candidate in v0.4.0.
+
 ### Review / Promotion Boundary
 
 The persistence gate between `source_sync` and Career Knowledge. It applies Promotion Criteria and requires Human Review before a Canonical Event can become durable knowledge. Source Confidence can prioritize and inform this review, but even `high` confidence cannot bypass it.
@@ -160,8 +164,9 @@ flowchart TD
     G --> I[Source Timeline]
     G --> P[Review Queue]
     P --> J[Human Review / Promotion Boundary]
-    J -->|approved| K[Career Knowledge]
-    J -->|rejected / deferred / needs more evidence| N[Non-promoted decision]
+    J --> Q[Review Decision Log]
+    Q -.->|future approved promotion| K[Career Knowledge]
+    Q -->|rejected / deferred / needs more evidence| N[Non-promoted decision]
     K --> L[Resume View]
     K --> M[Portfolio View]
     K --> O[Interview Story View]
