@@ -27,7 +27,9 @@ GitHub often shows what changed. Slack and Teams often show what was discussed. 
 7. Human reviews candidate events against the Promotion Criteria
 8. Review Decision Log records the outcome
 9. A future persistence step writes accepted meaning to Career Knowledge Store
-10. Views are generated when needed
+10. A future Claim Builder derives presentation candidates from Career Knowledge
+11. Human Review or View Selection approves candidates for a specific use
+12. Views are generated when needed
 ```
 
 This sequence matters. me-shower should not jump directly from noisy inputs to Resume claims.
@@ -84,6 +86,17 @@ Review Decision Log is the append-only history of Human Review decisions about C
 - Raw source, secrets, private URLs, confidential content, non-generalized internal names, AI inference, claim candidates, and generated output must not be stored.
 - Career Knowledge Entries reference the originating Review Decision instead of replacing or duplicating the Decision Log.
 - The Store must not be edited casually by hand. Persistence behavior will be designed after v0.5.0 PromotionDecisionRecord hardening introduces accepted meaning and the required review metadata.
+
+## Operating Claim Builder
+
+- Claim Builder must use reviewed Career Knowledge and `accepted_meaning`; it must not read `source_sync` directly.
+- Claim Builder must not read Review Decision Log rows directly or treat an `approved` decision alone as sufficient input.
+- Review Decision and Evidence references on a Claim Candidate provide traceability; they do not replace Career Knowledge as the input boundary.
+- A Claim Candidate requires Human Review or View Selection before it can be used.
+- A Claim Candidate must never become a source of truth, Career Knowledge, or Resume output by status change or convenience.
+- `approved_for_view` authorizes only a specific downstream use. It does not mean Career Knowledge approval, Promotion approval, or persistence.
+- Claim Builder must not expose raw source, secrets, private URLs, confidential content, AI inference presented as fact, or Resume overstatement.
+- v0.4.0 creates no Claim Candidate data, persistence, CLI, or View output.
 
 ## Career Knowledge Promotion Criteria
 

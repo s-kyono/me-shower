@@ -1,0 +1,93 @@
+version: claim_builder_v0_4
+description: Defines the boundary for future Claim Candidate generation from Career Knowledge.
+
+builder_role:
+  creates_career_knowledge: false
+  modifies_career_knowledge_store: false
+  creates_source: false
+  creates_review_decision: false
+  creates_resume: false
+  creates_claim_candidates_in_this_pr: false
+
+claim_candidate_role:
+  source_of_truth: false
+  career_knowledge: false
+  resume_output: false
+  generated_candidate: true
+  requires_human_review_before_view_use: true
+
+allowed_future_inputs:
+  career_knowledge_entry: true
+  accepted_meaning: true
+  validated_promotion_decision_record: true
+  safe_evidence_reference: true
+
+forbidden_inputs:
+  raw_source_content: true
+  source_sync: true
+  canonical_event_direct: true
+  review_queue_item: true
+  review_decision_log_row_direct: true
+  approved_decision_only: true
+  generated_resume: true
+  generated_pdf: true
+
+forbidden_outputs:
+  career_knowledge_entry: true
+  resume: true
+  pdf: true
+  source: true
+  evidence: true
+  review_decision: true
+
+claim_candidate_contract:
+  schema_version: claim_candidate_v0_4
+  required_future_fields:
+    - claim_id
+    - source_knowledge_refs
+    - source_decision_refs
+    - claim_type
+    - audience
+    - text
+    - supported_by
+    - risk_flags
+    - status
+    - created_at
+  claim_type_candidates: [achievement, strength, responsibility, technical_depth, decision_making, improvement, learning]
+  audience_candidates: [resume, portfolio, interview, casual_meeting, general_profile]
+  status_candidates: [draft, needs_review, approved_for_view, rejected]
+  risk_flag_candidates:
+    - unsupported_claim
+    - evidence_missing
+    - ai_inference_risk
+    - resume_overstatement_risk
+    - confidentiality_risk
+    - private_url_risk
+    - raw_source_risk
+    - too_broad
+    - too_specific
+    - audience_mismatch
+  status_invariants:
+    approved_for_view_is_career_knowledge_approval: false
+    approved_for_view_is_promotion_approval: false
+    approved_for_view_persists_career_knowledge: false
+
+safety:
+  no_raw_source_content: true
+  no_secret_values: true
+  no_private_urls: true
+  no_confidential_content: true
+  no_ai_inference_as_fact: true
+  no_resume_overstatement: true
+
+current_scope:
+  define_builder_boundary: true
+  define_claim_candidate_contract: true
+  create_actual_claim_candidates: false
+  implement_cli: false
+  generate_views: false
+  modify_career_knowledge_store: false
+
+future_connections:
+  v0_5_promotion_decision_record: [accepted_meaning, structured_reviewed_evidence_refs, promotion_ready]
+  later_view_generation: [select_claim_candidates_for_view, approve_claim_for_view, render_resume_from_approved_claims]
