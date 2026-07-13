@@ -98,6 +98,30 @@ Review Decision Log is the append-only history of Human Review decisions about C
 - Claim Builder must not expose raw source, secrets, private URLs, confidential content, AI inference presented as fact, or Resume overstatement.
 - v0.4.0 creates no Claim Candidate data, persistence, CLI, or View output.
 
+## Operating View Generation
+
+- View Generation may generate text only from Career Knowledge Entries and reviewed Claim Candidates under purpose-specific View Selection or View Approval.
+- Every request requires a target View type, a Career Knowledge Entry reference, and purpose-specific View permission. These are conditional rules, not a requirement that every allowed input always be present.
+- Career Knowledge may directly supply structural facts such as periods, affiliations, roles, technologies, and chronology. Claim-like wording requires a reviewed Claim Candidate and must not be inferred from structural fields alone.
+- `accepted_meaning` must be accessed through its Career Knowledge Entry. It is not sufficient alone and must not bypass Career Knowledge Store.
+- Safe Evidence references and PromotionDecisionRecords are traceability or validation context only. They must not resolve raw content, generate View text, or create a new Claim.
+- View Generation must not read `source_sync`, raw source, Canonical Events, Review Queue items, or Review Decision Log rows directly.
+- An `approved` decision alone or a PromotionDecisionRecord alone is not sufficient input.
+- An unreviewed Claim Candidate must not be used. View permission is purpose-specific: Resume approval does not imply Portfolio or Interview Story approval.
+- View Generation may select, reorder, summarize, and adjust tone only without meaning change. It must not create facts or causality, expand contribution scope, or merge Claims into new meaning. New meaning requires a new Claim Candidate and review.
+- Attribution, team versus individual contribution, contribution scope, numbers and units, time scope, qualifiers, uncertainty, causality presence or absence, and semantic category must be preserved. Omitting a qualifier must not strengthen a Claim.
+- Approval permits use but never overrides safety. Unresolved confidentiality, raw-source, overstatement, or personal-information risk invalidates generation permission.
+- Audit and traceability metadata must remain separate from View content. Internal Source, Decision, and Evidence identifiers must not be rendered or exposed to public or semi-public Views.
+- Personal information is excluded by default. It must not be inferred, obtained from unreviewed Source, or added by projection; a View that needs it requires a separate explicit policy.
+- `timeline_view` chronologically projects reviewed Career Knowledge and non-resolvable traceability metadata. It is not Source Timeline, does not read `source_sync`, and does not render Source content.
+- PDF is a render format, not a View type. Resume is a View that may be rendered as Markdown, HTML, or PDF.
+- View Generation produces a future structured View. A separate Renderer produces Markdown, HTML, or PDF and must not change accepted meaning. Neither component is implemented in v0.4.0.
+- Missing permission or Career Knowledge references rejects generation. Conflicting Claims and unresolved risks return to review; unknown facts are omitted or reviewed, never filled by AI.
+- A View must never become a source of truth, Career Knowledge, or a Claim Candidate. Resume is a View, not an authoritative record.
+- View output and wording must never flow back into Career Knowledge, `accepted_meaning`, Source, Evidence, or Claim support. A discovered issue must be routed to an upstream review request for Human Review and any necessary new Review Decision or Career Knowledge revision.
+- View Generation must not expose raw source, secrets, private URLs, confidential content, AI inference presented as fact, or Resume overstatement.
+- v0.4.0 defines only the boundary, constraints, and View types. It implements no CLI and creates no Resume, PDF, Portfolio, Interview Story, or other View output.
+
 ## Career Knowledge Promotion Criteria
 
 A Canonical Event is not Career Knowledge. When it is stored in `source_sync`, it is only a reviewable candidate. Promotion Criteria are not a score of how impressive the work is; they are the persistence gate for deciding whether the candidate is safe and useful as reviewed, long-term Career Knowledge.
