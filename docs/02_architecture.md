@@ -6,6 +6,8 @@ Its purpose is to make clear where truth lives, what each layer is responsible f
 
 ## End-to-End Flow
 
+The diagram below is the target architecture across releases, not a claim that every step is implemented in v0.4.0. v0.4.0 defines Review & Promotion as a boundary and policy release. PromotionDecisionRecord persistence, Career Knowledge persistence, validators, and downstream generation remain v0.5.0+ work.
+
 ```text
 Raw Source
     ↓
@@ -51,11 +53,48 @@ Renderer
 Markdown / PDF
 ```
 
-The Resume-specific branch shown here applies after View Generation inputs have passed purpose-specific approval. Other View types have their own future output paths. The key rule is that Views such as Resume or Portfolio must not come first. Source is structured into reviewable Canonical Events, stored as candidates in `source_sync`, and passed through the Review / Promotion Boundary before Career Knowledge is grown. Only then are downstream Views generated and optionally rendered as formats such as PDF.
+The Resume-specific branch shown here describes the future path after View Generation inputs have passed purpose-specific approval. Other View types have their own future output paths. The key rule is that Views such as Resume or Portfolio must not come first. Source is structured into reviewable Canonical Events, stored as candidates in `source_sync`, and passed through the Review / Promotion Boundary before future Career Knowledge persistence. Only a later implementation may derive downstream Views and optionally render formats such as PDF.
 
 Evidence Traceability runs alongside this flow as a cross-cutting audit boundary. It allows Career Knowledge, Claim Candidates, Views, and Resume outputs to retain safe links to supporting Evidence references without passing raw source into Claim Builder, View Generation, Resume regeneration, or rendering. Evidence references are audit metadata, not wording inputs.
 
 Rejection / Defer Reason sits beside a non-approved Review or Promotion Decision and explains it as audit metadata. `rejected`, `deferred`, `needs_more_evidence`, and policy-blocked subjects do not flow into Career Knowledge or Claim Builder through their reasons. Reason codes and explanations are never wording inputs.
+
+## Release Boundary
+
+```text
+v0.3.0 — Source Intelligence
+Source → Canonical Event
+
+v0.4.0 — Review & Promotion Boundary
+Canonical Event → Review Queue → Human Review → Review Decision / Reason → Promotion Boundary
+
+v0.5.0+ — Mechanically checkable promotion and persistence
+PromotionDecisionRecord → Career Knowledge persistence → Claim / View / Resume generation
+```
+
+The detailed safe flow is:
+
+```text
+Source
+  ↓
+Canonical Event
+  ↓
+Review Queue
+  ↓
+Human Review
+  ↓
+Review Decision / Reason
+  ↓
+PromotionDecisionRecord
+  ↓
+Career Knowledge Store
+  ↓
+Claim Candidate
+  ↓
+View / Resume
+```
+
+Only the Review & Promotion policy and architecture boundary is defined in v0.4.0. The flow after Review Decision is a handoff contract, not a completed runtime. Evidence Traceability and Rejection / Defer Reason are cross-cutting audit metadata: neither creates meaning, grants approval, persists Career Knowledge, nor supplies downstream wording.
 
 ## v0.3.0 Source Intelligence Flow
 
@@ -167,13 +206,13 @@ Reviewed long-term knowledge built from Canonical Events and supporting evidence
 
 ### View Generation
 
-A future projection layer that selects Career Knowledge and reviewed Claim Candidates approved for a specific View use, then generates Resume, Portfolio, Interview Story, or another purpose-specific View. `accepted_meaning` is available only through its Career Knowledge Entry. Safe Evidence references and PromotionDecisionRecords provide traceability or validation context only and cannot generate View text or resolve raw content.
+A future projection boundary for selecting Career Knowledge and reviewed Claim Candidates approved for a specific View use and projecting them into Resume, Portfolio, Interview Story, or another purpose-specific View. `accepted_meaning` is available only through its Career Knowledge Entry. Safe Evidence references and PromotionDecisionRecords provide traceability or validation context only and cannot supply View text or resolve raw content.
 
 It does not create or modify Career Knowledge, make Claim Candidates authoritative, or use `source_sync`, Review Decision Log rows, an approved decision alone, a PromotionDecisionRecord alone, or unreviewed Claim Candidates directly. It may transform reviewed meaning only without creating facts, causality, expanded contribution scope, or merged new meaning. Views are not sources of truth, Career Knowledge, or Claim Candidates, and their wording must never flow back into Career Knowledge. v0.4.0 defines only the View Generation boundary and contract; it implements no generation and creates no View output.
 
 A target View type, Career Knowledge Entry reference, and purpose-specific permission are always required. Structural facts may come directly from Career Knowledge; generated claim text additionally requires a reviewed Claim Candidate. Transformations preserve attribution, contribution scope, numbers and units, time, qualifiers, uncertainty, causality, and semantic category. Approval cannot override safety, and missing or conflicting inputs fail closed rather than being inferred.
 
-View Generation outputs a future structured View. A separate Renderer is responsible for Markdown, HTML, or PDF output and cannot change accepted meaning. Audit metadata remains separate from View content, and personal information is excluded unless governed by a separate explicit policy.
+The boundary specifies a future structured View and a separate Renderer contract for Markdown, HTML, or PDF output that cannot change accepted meaning. Audit metadata remains separate from View content, and personal information is excluded unless governed by a separate explicit policy.
 
 ### Resume Regeneration Policy
 
@@ -184,6 +223,10 @@ It prohibits direct or trigger-only regeneration from raw source, `source_sync`,
 ## Truth Boundary
 
 This section defines what each layer is and is not. If these boundaries blur, downstream convenience tends to become upstream truth.
+
+The future source of truth for reviewed, accepted career meaning is the Career Knowledge Store. v0.4.0 defines that future boundary but does not yet operate it as completed persistence.
+
+The following are not sources of truth for Career Knowledge: Source, Canonical Event, Review Queue, Review Decision alone, Rejection / Defer Reason, Evidence Traceability, Claim Candidate, View, Resume, generated PDF, and generated Markdown.
 
 ### Raw Source
 
@@ -262,13 +305,15 @@ flowchart TD
 
 ## Source of Truth Layers
 
+This is the target separation of responsibilities across releases; the Career Knowledge persistence layer is not complete in v0.4.0.
+
 ```text
 Raw Source: external / local original
 RawSource: transient adapter output
 source_sync: canonical event store
 Review / Promotion Boundary: human-reviewed persistence gate
 Career Knowledge: reviewed long-term knowledge
-Career Knowledge Store: durable store for accepted meaning; boundary only in v0.4.0
+Career Knowledge Store: future durable-store boundary for accepted meaning; no completed persistence in v0.4.0
 Evidence Traceability: cross-cutting audit boundary; never a generation input or source of truth
 Rejection / Defer Reason: audit metadata for non-approved outcomes; never Career Knowledge or wording input
 Claim Builder: future transformation from Career Knowledge to presentation candidates; contract only in v0.4.0

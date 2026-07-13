@@ -8,6 +8,12 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- v0.4.0 Concept Update
+  - Clarifies v0.4.0 as the Review & Promotion boundary between Canonical Events and future Career Knowledge persistence.
+  - Summarizes the roles of Promotion Criteria, Review Queue, Review Decision Log, Career Knowledge Store, Claim Builder, View Generation, Resume Regeneration Policy, Evidence Traceability, and Rejection / Defer Reason.
+  - Clarifies source-of-truth boundaries: Resume, Views, Claim Candidates, Evidence references, reasons, Review Queue items, and generated artifacts are not Career Knowledge.
+  - Distinguishes v0.4.0 policy boundaries from v0.5.0+ implementation work such as PromotionDecisionRecord, persistence contracts, Evidence schemas, Reason schemas, validators, and runtime workflows.
+
 - Rejection / Defer Reason
   - Defines safe reason categories for rejected, deferred, needs_more_evidence, and blocked review outcomes.
   - Clarifies that reasons are audit metadata rather than Career Knowledge, Claim Candidates, Views, or generation inputs.

@@ -13,16 +13,24 @@ me-shower は、仕事の痕跡・証跡・Human Review から Career Knowledge 
 
 詳しくは以下を参照してください。
 
-- `docs/ja/00_vision.md`
-- `docs/ja/01_concepts.md`
-- `docs/ja/02_architecture.md`
-- `docs/ja/03_operating_model.md`
+- `docs/00_vision.md`
+- `docs/01_concepts.md`
+- `docs/02_architecture.md`
+- `docs/03_operating_model.md`
+
+`docs/ja/` は人間向けの Japanese companion docs です。設計上の正本は `docs/` 直下の canonical docs です。
+
+v0.4.0 Review & Promotion は、Canonical Events と将来の Career Knowledge persistence の間の境界を定義します。Promotion Criteria、Review Queue、Review Decision Log、Career Knowledge Store、Claim / View / Resume、Evidence Traceability、Rejection / Defer Reason の各境界を一貫した policy / architecture として整理します。
+
+v0.4.0 は境界定義のリリースであり、PromotionDecisionRecord persistence、Career Knowledge 実データ、Evidence DB、Reason Record、downstream generation、CLI workflow、generated output を完成実装しません。Career Knowledge Store は reviewed career meaning の将来の source-of-truth boundary であり、Resume、View、Claim Candidate、Evidence Reference、Reason、Review Queue、generated Markdown、PDF は Career Knowledge の source of truth ではありません。
+
+統合した概念と v0.5.0 への handoff は `docs/review-promotion/v0_4_0_concept.md` を参照してください。
 
 Career Knowledge Store は、レビュー済み Career Knowledge を将来永続化する正本領域です。v0.4.0 では境界と `app/data/career_knowledge/` ディレクトリだけを定義し、`approved` の Review Decision を自動保存しません。将来の入力は Human Review で受理された `accepted_meaning` であり、Canonical Event 全体や generated output ではありません。
 
-Claim Builder は、レビュー済み Career Knowledge を View 向けの表現候補へ変換する将来レイヤーです。v0.4.0 では境界と Claim Candidate 契約だけを定義し、Claim、Resume、PDF、View の生成や永続化は行いません。Claim Candidate は Career Knowledge、Resume、source of truth のいずれでもなく、利用前に Human Review または View Selection が必要です。
+Claim Builder は、レビュー済み Career Knowledge から View 向けの表現候補を導出する将来境界を定義します。v0.4.0 では境界と Claim Candidate 契約だけを定義し、Claim、Resume、PDF、View の生成や永続化は行いません。Claim Candidate は Career Knowledge、Resume、source of truth のいずれでもなく、利用前に Human Review または View Selection が必要です。
 
-View Generation は、レビュー済み Career Knowledge と reviewed Claim Candidate を用途別 View へ投影する将来レイヤーです。新しい事実・因果・貢献範囲・意味は作らず、Evidence reference は追跡専用です。用途別承認は安全制約を上書きせず、不足情報はAIで補完しません。v0.4.0 では境界と View 種別だけを定義し、Resume、PDF、Portfolio、Interview Story、その他の generated output は生成しません。View Generationは将来のstructured Viewまでを担当し、PDFは別Rendererのrender formatです。
+View Generation は、レビュー済み Career Knowledge と reviewed Claim Candidate を用途別 View へ投影する将来境界を定義します。新しい事実・因果・貢献範囲・意味は作らず、Evidence reference は追跡専用です。用途別承認は安全制約を上書きせず、不足情報はAIで補完しません。v0.4.0 では境界と View 種別だけを定義し、Resume、PDF、Portfolio、Interview Story、その他の generated output は生成しません。将来の structured View と別 Renderer の render format は未実装です。
 
 Resume Regeneration Policy は、レビュー済み Career Knowledge と reviewed Claim Candidate から Resume View をいつ再生成できるかを定義します。Resume は View であり、Career Knowledge や source of truth ではありません。v0.4.0 ではポリシー境界のみを定義し、Resume、Markdown、PDF、その他の output は生成しません。再生成後の Resume は draft であり、delivery 前にレビューが必要です。
 
