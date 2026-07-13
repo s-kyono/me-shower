@@ -134,7 +134,7 @@ Claim Builder creates presentation candidates from Career Knowledge. View Genera
 
 ## Relationship to Resume Regeneration Policy
 
-Resume is one View, not the primary asset. A future Resume Regeneration Policy must define when regeneration is allowed, which reviewed inputs may be used, and how generated output is reviewed. It must preserve the same truth, approval, safety, and no-backflow boundaries.
+Resume is one View, not the primary asset. Resume Regeneration Policy defines when regeneration is allowed, which reviewed inputs may be used, and how generated output is reviewed. It preserves the same truth, approval, safety, and no-backflow boundaries while adding Resume-specific trigger and draft-before-delivery rules.
 
 ## v0.5.0 Dependency
 

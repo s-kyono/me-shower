@@ -29,7 +29,8 @@ GitHub often shows what changed. Slack and Teams often show what was discussed. 
 9. A future persistence step writes accepted meaning to Career Knowledge Store
 10. A future Claim Builder derives presentation candidates from Career Knowledge
 11. Human Review or View Selection approves candidates for a specific use
-12. Views are generated when needed
+12. A purpose-specific View policy determines whether regeneration is permitted
+13. Views are generated as drafts when needed and reviewed before delivery
 ```
 
 This sequence matters. me-shower should not jump directly from noisy inputs to Resume claims.
@@ -121,6 +122,18 @@ Review Decision Log is the append-only history of Human Review decisions about C
 - View output and wording must never flow back into Career Knowledge, `accepted_meaning`, Source, Evidence, or Claim support. A discovered issue must be routed to an upstream review request for Human Review and any necessary new Review Decision or Career Knowledge revision.
 - View Generation must not expose raw source, secrets, private URLs, confidential content, AI inference presented as fact, or Resume overstatement.
 - v0.4.0 defines only the boundary, constraints, and View types. It implements no CLI and creates no Resume, PDF, Portfolio, Interview Story, or other View output.
+
+## Operating Resume Regeneration
+
+- Resume is a View, not Career Knowledge or source of truth.
+- Resume regeneration requires Career Knowledge, reviewed Claim Candidates for generated Claim text, and purpose-specific Resume View Permission. Resume policy and template also constrain the future output.
+- Resume must not be regenerated from raw source, `source_sync`, Canonical Events, Review Queue items, Review Decision Log rows, approved decisions alone, PromotionDecisionRecords alone, unreviewed Claim Candidates, previous Resume output, generated PDFs, or Views from another purpose.
+- Changes only to forbidden upstream or generated artifacts are not regeneration triggers. Eligible changes include Career Knowledge, reviewed Claim Candidates, Resume permission, Resume policy, Resume template, and render format.
+- Regeneration permission is not delivery permission. Every regenerated Resume is draft output and requires review before delivery, submission, or publication.
+- Resume optimization may select, reorder, summarize, or adjust tone only while preserving accepted meaning. It must not invent facts or causality, expand contribution scope, or strengthen a Claim by dropping qualifiers.
+- Unresolved blocking or confidentiality risk rejects regeneration. Unresolved overstatement returns to review, and personal information requires a separate explicit policy.
+- Resume output and wording must never update Career Knowledge, become `accepted_meaning`, or serve as future generation input. Findings return upstream for Human Review and any necessary new Review Decision or Career Knowledge revision.
+- v0.4.0 defines only the policy boundary. It implements no CLI, Resume generation, Structured Resume View, Renderer, lifecycle, manifest, diff, Markdown, PDF, or other generated output.
 
 ## Career Knowledge Promotion Criteria
 

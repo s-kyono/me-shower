@@ -37,10 +37,16 @@ Human Review / View Selection
     ↓
 View Generation
     ↓
-Resume / Portfolio / Interview Story
+Resume Regeneration Policy (for Resume Views)
+    ↓
+Structured Resume View
+    ↓
+Renderer
+    ↓
+Markdown / PDF
 ```
 
-The key rule in this flow is that Views such as Resume or Portfolio must not come first. Source is structured into reviewable Canonical Events, stored as candidates in `source_sync`, and passed through the Review / Promotion Boundary before Career Knowledge is grown. Only then are downstream Views generated and optionally rendered as formats such as PDF.
+The Resume-specific branch shown here applies after View Generation inputs have passed purpose-specific approval. Other View types have their own future output paths. The key rule is that Views such as Resume or Portfolio must not come first. Source is structured into reviewable Canonical Events, stored as candidates in `source_sync`, and passed through the Review / Promotion Boundary before Career Knowledge is grown. Only then are downstream Views generated and optionally rendered as formats such as PDF.
 
 ## v0.3.0 Source Intelligence Flow
 
@@ -148,6 +154,12 @@ A target View type, Career Knowledge Entry reference, and purpose-specific permi
 
 View Generation outputs a future structured View. A separate Renderer is responsible for Markdown, HTML, or PDF output and cannot change accepted meaning. Audit metadata remains separate from View content, and personal information is excluded unless governed by a separate explicit policy.
 
+### Resume Regeneration Policy
+
+The Resume-specific policy gate defines when a Resume View may be regenerated from Career Knowledge Entries, reviewed Claim Candidates, purpose-specific Resume View Permission, Resume policy and template, and safe traceability metadata. Traceability metadata cannot generate text or resolve raw content.
+
+It prohibits direct or trigger-only regeneration from raw source, `source_sync`, Canonical Events, Review Queue items, Review Decision Log rows, approved decisions alone, PromotionDecisionRecords alone, unreviewed Claim Candidates, previous Resume output, generated PDF, or Views created for another purpose. A regenerated Resume is draft output and requires review before delivery. It cannot update Career Knowledge or become future input. v0.4.0 defines this contract only; it implements no regeneration, Structured Resume View, Renderer, lifecycle, manifest, diff, Resume, Markdown, or PDF output.
+
 ## Truth Boundary
 
 This section defines what each layer is and is not. If these boundaries blur, downstream convenience tends to become upstream truth.
@@ -215,9 +227,10 @@ flowchart TD
     R --> S[Claim Candidates]
     S --> T[Human Review / View Selection]
     T --> U[View Generation]
-    U --> V[Structured View]
+    U --> X[Resume Regeneration Policy]
+    X --> V[Structured Resume View]
     V --> W[Renderer]
-    W --> L[Markdown / HTML / PDF]
+    W --> L[Markdown / PDF]
 ```
 
 ## Source of Truth Layers
@@ -233,8 +246,9 @@ Claim Builder: future transformation from Career Knowledge to presentation candi
 Claim Candidate: non-authoritative presentation candidate requiring review before View use
 View Generation: future purpose-specific projection after Human Review / View Selection; boundary only in v0.4.0
 View: non-authoritative generated projection that never flows back into Career Knowledge
+Resume Regeneration Policy: Resume-specific regeneration gate; contract only in v0.4.0
 Source Timeline: derived view
-Resume: audience-specific view
+Resume: audience-specific draft view requiring review before delivery
 PDF: rendered artifact
 ```
 
