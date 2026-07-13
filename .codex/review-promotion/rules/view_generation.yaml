@@ -1,0 +1,198 @@
+version: view_generation_v0_4
+description: Defines the boundary for future View generation from Career Knowledge and reviewed Claim Candidates.
+
+generator_role:
+  creates_career_knowledge: false
+  modifies_career_knowledge_store: false
+  creates_source: false
+  creates_evidence: false
+  creates_review_decision: false
+  creates_claim_candidate: false
+  renders_pdf: false
+  generates_views_in_this_pr: false
+
+view_role:
+  source_of_truth: false
+  career_knowledge: false
+  claim_candidate: false
+  generated_projection: true
+  downstream_of_career_knowledge: true
+
+allowed_future_inputs:
+  target_view_type: true
+  career_knowledge_entry: true
+  reviewed_claim_candidate: true
+  view_selection_result: true
+
+input_roles:
+  generation_inputs:
+    always_required:
+      target_view_type: true
+      career_knowledge_entry: true
+      view_selection_result: true
+    conditionally_required:
+      reviewed_claim_candidate:
+        required_for_generated_claim_text: true
+        required_for_structural_fact_projection: false
+  traceability_only_inputs:
+    safe_evidence_reference:
+      may_resolve_raw_content: false
+      may_generate_view_text: false
+      may_generate_new_claim: false
+    promotion_decision_record:
+      may_generate_view_text: false
+
+input_invariants:
+  accepted_meaning_requires_career_knowledge_entry: true
+  accepted_meaning_alone_is_sufficient: false
+  accepted_meaning_must_be_accessed_through_career_knowledge_entry: true
+  may_bypass_career_knowledge_store: false
+  view_approval_is_purpose_specific: true
+  approval_for_one_view_type_implies_other_view_types: false
+
+generation_input_invariants:
+  target_view_type_required: true
+  career_knowledge_entry_required: true
+  purpose_specific_view_permission_required: true
+  reviewed_claim_candidate_required_for_generated_claim_text: true
+  career_knowledge_entry_alone_may_supply_structural_facts: true
+  structural_facts_may_be_inferred_into_claim_wording: false
+
+forbidden_inputs:
+  raw_source_content: true
+  source_sync: true
+  canonical_event_direct: true
+  review_queue_item: true
+  review_decision_log_row_direct: true
+  approved_decision_only: true
+  promotion_decision_record_alone: true
+  unreviewed_claim_candidate: true
+  generated_resume: true
+  generated_pdf: true
+
+forbidden_outputs:
+  career_knowledge_entry: true
+  source: true
+  evidence: true
+  review_decision: true
+  claim_candidate: true
+  promotion_decision_record: true
+
+view_types:
+  - resume
+  - portfolio
+  - interview_story
+  - casual_meeting_profile
+  - skill_summary
+  - timeline_view
+
+render_formats:
+  - markdown
+  - html
+  - pdf
+
+rendering_invariants:
+  pdf_is_view_type: false
+  pdf_is_render_format: true
+
+transformation_constraints:
+  may_select: true
+  may_reorder: true
+  may_summarize_without_meaning_change: true
+  may_adjust_tone_without_meaning_change: true
+  may_create_new_fact: false
+  may_create_new_causality: false
+  may_expand_contribution_scope: false
+  may_merge_claims_into_new_meaning: false
+  new_meaning_requires_new_reviewed_claim_candidate: true
+
+semantic_preservation:
+  preserve_attribution: true
+  preserve_contribution_scope: true
+  preserve_numbers_and_units: true
+  preserve_time_scope: true
+  preserve_qualifiers: true
+  preserve_uncertainty: true
+  preserve_causality_presence_or_absence: true
+  preserve_semantic_category: true
+  omitted_qualifier_must_not_strengthen_claim: true
+
+approval_invariants:
+  view_approval_overrides_safety_rules: false
+  approval_with_unresolved_confidentiality_risk_is_valid: false
+  approval_with_unresolved_overstatement_risk_is_valid: false
+  approval_with_unresolved_raw_source_risk_is_valid: false
+  approval_with_unresolved_personal_information_risk_is_valid: false
+
+traceability_rendering:
+  rendered_in_view_content: false
+  exposed_to_public_view: false
+  internal_identifiers_must_not_be_rendered: true
+  audit_metadata_must_remain_separate_from_view_content: true
+
+personal_information:
+  included_by_default: false
+  requires_separate_explicit_policy: true
+  must_not_be_inferred: true
+  must_not_come_from_unreviewed_source: true
+  must_not_be_added_by_projection: true
+
+output_roles:
+  view_generation_output: structured_view
+  renderer_output:
+    - markdown
+    - html
+    - pdf
+  render_format_must_not_change_accepted_meaning: true
+
+failure_policy:
+  missing_required_approval: reject_generation
+  missing_career_knowledge_reference: reject_generation
+  conflicting_claims: require_review
+  unresolved_risk: require_review
+  unknown_fact: omit_or_require_review
+  ai_must_not_fill_missing_information: true
+
+timeline_boundaries:
+  timeline_view_is_source_timeline: false
+  timeline_view_reads_source_sync_directly: false
+  timeline_view_renders_source_content: false
+  timeline_view_uses_reviewed_career_knowledge_chronology: true
+  traceability_metadata_must_be_non_resolvable: true
+
+non_resolvable_traceability_metadata:
+  contains_raw_source_path: false
+  contains_private_url: false
+  contains_secret_or_authentication_data: false
+  allows_view_user_to_retrieve_source_content: false
+  exposes_internal_proper_nouns: false
+
+safety:
+  no_raw_source_content: true
+  no_secret_values: true
+  no_private_urls: true
+  no_confidential_content: true
+  no_ai_inference_as_fact: true
+  no_resume_overstatement: true
+  no_view_to_knowledge_backflow: true
+  view_issue_requires_upstream_review_request: true
+
+current_scope:
+  define_view_generation_boundary: true
+  define_view_types: true
+  define_input_output_constraints: true
+  implement_cli: false
+  generate_views: false
+  modify_career_knowledge_store: false
+  create_generated_output: false
+
+future_connections:
+  later_view_generation:
+    - select_claim_candidates_for_view
+    - render_resume_from_approved_claims
+    - render_portfolio_from_approved_claims
+    - render_interview_story_from_approved_claims
+  resume_regeneration_policy:
+    - when_resume_can_be_regenerated
+    - what_inputs_resume_may_use
+    - how_generated_resume_is_reviewed

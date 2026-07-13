@@ -22,6 +22,8 @@ Career Knowledge Store は、レビュー済み Career Knowledge を将来永続
 
 Claim Builder は、レビュー済み Career Knowledge を View 向けの表現候補へ変換する将来レイヤーです。v0.4.0 では境界と Claim Candidate 契約だけを定義し、Claim、Resume、PDF、View の生成や永続化は行いません。Claim Candidate は Career Knowledge、Resume、source of truth のいずれでもなく、利用前に Human Review または View Selection が必要です。
 
+View Generation は、レビュー済み Career Knowledge と reviewed Claim Candidate を用途別 View へ投影する将来レイヤーです。新しい事実・因果・貢献範囲・意味は作らず、Evidence reference は追跡専用です。用途別承認は安全制約を上書きせず、不足情報はAIで補完しません。v0.4.0 では境界と View 種別だけを定義し、Resume、PDF、Portfolio、Interview Story、その他の generated output は生成しません。View Generationは将来のstructured Viewまでを担当し、PDFは別Rendererのrender formatです。
+
 ## ディレクトリ構成
 
 ```text

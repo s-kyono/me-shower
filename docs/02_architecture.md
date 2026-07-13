@@ -33,12 +33,14 @@ Claim Builder
     ↓
 Claim Candidates
     ↓
+Human Review / View Selection
+    ↓
 View Generation
     ↓
 Resume / Portfolio / Interview Story
 ```
 
-The key rule in this flow is that views such as Resume or PDF must not come first. Source is structured into reviewable Canonical Events, stored as candidates in `source_sync`, and passed through the Review / Promotion Boundary before Career Knowledge is grown. Only then are downstream views generated.
+The key rule in this flow is that Views such as Resume or Portfolio must not come first. Source is structured into reviewable Canonical Events, stored as candidates in `source_sync`, and passed through the Review / Promotion Boundary before Career Knowledge is grown. Only then are downstream Views generated and optionally rendered as formats such as PDF.
 
 ## v0.3.0 Source Intelligence Flow
 
@@ -136,9 +138,15 @@ The boundary records one of `approved`, `rejected`, `deferred`, or `needs_more_e
 
 Reviewed long-term knowledge built from Canonical Events and supporting evidence. This is the durable core the system is trying to grow.
 
-### View Generator
+### View Generation
 
-Selects reviewed Claim Candidates and generates downstream outputs such as Resume, PDF, Portfolio summaries, or Interview Stories. View generation remains downstream of Career Knowledge and cannot make a Claim Candidate authoritative.
+A future projection layer that selects Career Knowledge and reviewed Claim Candidates approved for a specific View use, then generates Resume, Portfolio, Interview Story, or another purpose-specific View. `accepted_meaning` is available only through its Career Knowledge Entry. Safe Evidence references and PromotionDecisionRecords provide traceability or validation context only and cannot generate View text or resolve raw content.
+
+It does not create or modify Career Knowledge, make Claim Candidates authoritative, or use `source_sync`, Review Decision Log rows, an approved decision alone, a PromotionDecisionRecord alone, or unreviewed Claim Candidates directly. It may transform reviewed meaning only without creating facts, causality, expanded contribution scope, or merged new meaning. Views are not sources of truth, Career Knowledge, or Claim Candidates, and their wording must never flow back into Career Knowledge. v0.4.0 defines only the View Generation boundary and contract; it implements no generation and creates no View output.
+
+A target View type, Career Knowledge Entry reference, and purpose-specific permission are always required. Structural facts may come directly from Career Knowledge; generated claim text additionally requires a reviewed Claim Candidate. Transformations preserve attribution, contribution scope, numbers and units, time, qualifiers, uncertainty, causality, and semantic category. Approval cannot override safety, and missing or conflicting inputs fail closed rather than being inferred.
+
+View Generation outputs a future structured View. A separate Renderer is responsible for Markdown, HTML, or PDF output and cannot change accepted meaning. Audit metadata remains separate from View content, and personal information is excluded unless governed by a separate explicit policy.
 
 ## Truth Boundary
 
@@ -168,9 +176,19 @@ A downstream presentation candidate derived from Career Knowledge. It is neither
 
 A derived operational view generated from `source_sync`. It is not history itself.
 
-### Resume / PDF / Portfolio
+It is distinct from `timeline_view`: Source Timeline inspects Canonical Events in `source_sync`, while `timeline_view` chronologically projects reviewed Career Knowledge without reading or rendering Source content.
+
+### Resume / Portfolio
 
 Views generated from Career Knowledge. They are not sources of truth.
+
+### PDF
+
+A render format, not a View type. A Resume View may be rendered as Markdown, HTML, or PDF.
+
+### View
+
+A purpose-specific projection downstream of Career Knowledge and reviewed Claim Candidates. It is neither Career Knowledge nor a Claim Candidate, and it cannot flow back into either layer.
 
 ### Skills
 
@@ -196,9 +214,10 @@ flowchart TD
     K --> R[Claim Builder]
     R --> S[Claim Candidates]
     S --> T[Human Review / View Selection]
-    T --> L[Resume View]
-    T --> M[Portfolio View]
-    T --> O[Interview Story View]
+    T --> U[View Generation]
+    U --> V[Structured View]
+    V --> W[Renderer]
+    W --> L[Markdown / HTML / PDF]
 ```
 
 ## Source of Truth Layers
@@ -212,6 +231,8 @@ Career Knowledge: reviewed long-term knowledge
 Career Knowledge Store: durable store for accepted meaning; boundary only in v0.4.0
 Claim Builder: future transformation from Career Knowledge to presentation candidates; contract only in v0.4.0
 Claim Candidate: non-authoritative presentation candidate requiring review before View use
+View Generation: future purpose-specific projection after Human Review / View Selection; boundary only in v0.4.0
+View: non-authoritative generated projection that never flows back into Career Knowledge
 Source Timeline: derived view
 Resume: audience-specific view
 PDF: rendered artifact

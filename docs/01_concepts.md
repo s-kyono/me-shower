@@ -27,6 +27,10 @@ Claim Builder
     ↓
 Claim Candidates
     ↓
+Human Review / View Selection
+    ↓
+View Generation
+    ↓
 Views
 ```
 
@@ -146,12 +150,11 @@ Skills exist to improve source reading quality, review quality, and view generat
 
 ## View
 
-View is a purpose-specific output generated from Career Knowledge.
+View is a generated, purpose-specific projection of Career Knowledge and reviewed Claim Candidates. It is not truth, Career Knowledge, a Claim Candidate, Source, Evidence, a Review Decision, or another source of truth. Selection and wording may change for an audience, but the accepted meaning must not.
 
 Examples include:
 
 - Resume
-- PDF
 - Portfolio
 - Interview Story
 - Proposal Draft
@@ -159,6 +162,20 @@ Examples include:
 - Weekly Career Review
 
 Views vary by audience and purpose. Durable knowledge should remain upstream in Career Knowledge, while views are generated as needed.
+
+PDF is not a View type. It is one render format that may be used for a View such as Resume.
+
+## View Generation
+
+View Generation is the future projection layer from Career Knowledge and reviewed Claim Candidates to Views. It runs only after Human Review or View Selection has approved a candidate for a specific use; approval for Resume use does not imply approval for Portfolio or Interview Story use.
+
+View Generation does not create or modify Career Knowledge, does not turn a Claim Candidate into Career Knowledge, and does not read `source_sync`, Review Decision Log rows, an approved decision alone, or an unreviewed Claim Candidate directly. `accepted_meaning` is accessed only through a Career Knowledge Entry; it is not sufficient alone. Safe Evidence references are traceability-only and cannot be resolved or used to generate text.
+
+View Generation may select, reorder, summarize, and adjust tone only when meaning remains unchanged. It cannot create facts or causality, expand contribution scope, or merge Claims into new meaning. `timeline_view` projects reviewed Career Knowledge chronology and is distinct from the operational Source Timeline built from `source_sync`. PDF is a render format for a View, not a View type. v0.4.0 defines only these boundaries, constraints, and View types; it creates no actual View or generated output.
+
+Every View requires a target type, a Career Knowledge reference, and purpose-specific permission. Structural facts may be projected directly from Career Knowledge, while claim-like wording requires a reviewed Claim Candidate. Attribution, scope, numbers, time, qualifiers, uncertainty, causality, and semantic category must be preserved. Approval never overrides safety, audit metadata is not View content, and personal information is excluded unless a separate explicit policy allows it.
+
+View Generation outputs a future structured View; a separate Renderer may render it as Markdown, HTML, or PDF without changing accepted meaning. Missing inputs, conflicting Claims, unknown facts, and unresolved risks must not be filled by AI and instead fail closed or return to review.
 
 ## Non-Goals
 

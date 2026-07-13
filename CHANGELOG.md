@@ -8,6 +8,16 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- View Generation boundary
+  - Defines View Generation as the future projection layer from Career Knowledge and reviewed Claim Candidates to purpose-specific Views.
+  - Adds View types and input/output constraints.
+  - Clarifies that Views are not Career Knowledge, Claim Candidates, or source of truth.
+  - Prevents direct View generation from `source_sync`, Review Decision Log rows, approved decisions, or unreviewed Claim Candidates.
+  - Restricts Evidence references to traceability, prevents standalone `accepted_meaning` input, and prohibits transformations that create new meaning.
+  - Separates the Career Knowledge-based `timeline_view` from Source Timeline and treats PDF as a render format rather than a View type.
+  - Defines conditional generation inputs, semantic-preservation rules, fail-closed behavior, and the separation between structured Views and rendering.
+  - Prevents View Approval from overriding safety and keeps audit metadata and personal information outside View content by default.
+
 - Claim Builder boundary
   - Defines Claim Builder as the future transformation layer from Career Knowledge to presentation candidates.
   - Adds a Claim Candidate contract and rule boundary.
