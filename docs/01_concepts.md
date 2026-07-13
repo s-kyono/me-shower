@@ -76,6 +76,14 @@ me-shower does not start by generating polished claims and then searching for su
 
 Evidence does not mean storing raw text wholesale. It may be redacted, normalized, or canonicalized before further use.
 
+## Evidence Traceability
+
+Evidence Traceability is audit infrastructure, not generation infrastructure. It makes it possible to inspect which safe Evidence references support the meaning retained in Career Knowledge and projected through Claim Candidates, Views, and Resume output.
+
+An Evidence Reference is a safe, traceability-only reference, not raw source content, Career Knowledge, a Claim Candidate, a View, or a source of truth. It may support audit, Human Review, and future coverage checks, but it must not generate Claim, View, Resume, Portfolio, or Interview Story wording and must not resolve raw source for public output.
+
+Traceability records a support relationship; it does not establish review or approval. The existence of an Evidence Reference does not mean Human Review is complete, and the existence of a traceability chain does not approve Career Knowledge, a Claim Candidate, a View, or Resume delivery. Those decisions remain separate at their respective layers.
+
 ## Canonical Event
 
 Canonical Event is a reviewable event extracted from Source.

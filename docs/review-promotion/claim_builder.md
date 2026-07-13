@@ -6,7 +6,7 @@ Claim Builder is the future transformation layer that turns reviewed Career Know
 
 ## Responsibilities and Boundaries
 
-Claim Builder reshapes accepted Career Knowledge into audience-aware expression candidates. Its future inputs are Career Knowledge Entries, `accepted_meaning`, safe Evidence references, and validated PromotionDecisionRecords.
+Claim Builder reshapes accepted Career Knowledge into audience-aware expression candidates. Its future generation inputs are Career Knowledge Entries and their `accepted_meaning` under validated PromotionDecisionRecords. Safe Evidence references may accompany this process only as audit metadata; they are not generation inputs.
 
 It is not a knowledge promotion or persistence mechanism. It does not create or modify Career Knowledge Store, Source, Evidence, Review Decisions, Resume, PDF, or another View.
 
@@ -18,7 +18,7 @@ It is not truth, Career Knowledge, Source, Evidence, a Review Decision, Resume o
 
 ## Input and Output Constraints
 
-Claim Builder may eventually use only reviewed Career Knowledge Entries, their `accepted_meaning`, safe Evidence references, and validated PromotionDecisionRecords. `source_decision_refs` exists only for traceability.
+Claim Builder may eventually generate wording only from reviewed Career Knowledge Entries and their `accepted_meaning` under validated PromotionDecisionRecords. Safe Evidence references and `source_decision_refs` exist only for traceability; they must not generate Claim text or resolve raw content.
 
 It must not directly consume raw source, `source_sync`, Canonical Events, Review Queue items, Review Decision Log rows, an `approved` decision alone, Daily Reports, raw Slack, Teams, or GitHub text, generated Resume, or generated PDF. Its only future output is a Claim Candidate; v0.4.0 produces no actual output.
 
@@ -46,7 +46,7 @@ claim_candidate:
 - `claim_type` candidates are `achievement`, `strength`, `responsibility`, `technical_depth`, `decision_making`, `improvement`, and `learning`.
 - `audience` candidates are `resume`, `portfolio`, `interview`, `casual_meeting`, and `general_profile`.
 - `text` is pre-review candidate wording, not final Resume wording.
-- `supported_by` contains safe references to Career Knowledge, Evidence, or `accepted_meaning`, never raw content.
+- `supported_by` identifies the Career Knowledge support for the candidate. Any direct Evidence reference is audit traceability only, never raw content or Claim-text generation input.
 - `risk_flags` exposes overstatement, inference, evidence, confidentiality, scope, and audience risks for review.
 - `status` candidates are `draft`, `needs_review`, `approved_for_view`, and `rejected`.
 - `created_at` records when the candidate was created.
@@ -61,4 +61,4 @@ Career Knowledge Store remains the source of truth. Claim Builder is read-only w
 
 ## v0.5.0 Dependency
 
-Actual generation depends on PromotionDecisionRecord hardening that supplies `accepted_meaning`, structured reviewed Evidence references, and a validated promotion-ready record. Until those inputs and actual Career Knowledge Entries exist, Claim Builder remains a contract only.
+Actual generation depends on PromotionDecisionRecord hardening that supplies `accepted_meaning` and a validated promotion-ready record. Structured reviewed Evidence references may accompany those inputs only as audit metadata. Until those inputs and actual Career Knowledge Entries exist, Claim Builder remains a contract only.

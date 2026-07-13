@@ -1,0 +1,119 @@
+version: evidence_traceability_v0_4
+description: Defines evidence traceability boundaries for Career Knowledge, Claim Candidates, Views, and Resume outputs.
+
+evidence_traceability_role:
+  audit_support: true
+  review_support: true
+  coverage_support: true
+  generation_input: false
+  source_of_truth: false
+  career_knowledge: false
+  claim_candidate: false
+  view: false
+  approval: false
+  human_review: false
+
+evidence_reference_role:
+  raw_source_content: false
+  safe_reference: true
+  traceability_only: true
+  may_generate_claim_text: false
+  may_generate_resume_text: false
+  may_generate_view_text: false
+  may_resolve_raw_content_for_view: false
+  may_replace_human_review: false
+  may_replace_approval: false
+
+allowed_future_links:
+  career_knowledge_to_evidence_refs: true
+  claim_candidate_to_career_knowledge_refs: true
+  claim_candidate_to_evidence_refs_for_audit: true
+  view_to_claim_refs: true
+  view_to_career_knowledge_refs: true
+  view_to_evidence_refs_for_audit: true
+  resume_to_claim_refs: true
+  resume_to_career_knowledge_refs: true
+  resume_to_evidence_refs_for_audit: true
+  manifest_to_evidence_refs_for_audit: true
+
+forbidden_uses:
+  generate_claim_text_from_evidence: true
+  generate_resume_text_from_evidence: true
+  generate_view_text_from_evidence: true
+  resolve_raw_source_for_view: true
+  render_raw_source_content: true
+  render_source_file_path: true
+  render_private_url: true
+  render_secret_value: true
+  render_credential: true
+  render_confidential_content: true
+  render_unreviewed_personal_information: true
+  treat_traceability_as_human_review: true
+  treat_traceability_as_career_knowledge_approval: true
+  treat_traceability_as_claim_approval: true
+  treat_traceability_as_view_approval: true
+  treat_traceability_as_resume_delivery_approval: true
+  treat_evidence_as_source_of_truth: true
+
+traceability_safety:
+  no_raw_source_content: true
+  no_source_file_paths: true
+  no_private_urls: true
+  no_secret_values: true
+  no_credentials: true
+  no_confidential_content: true
+  no_unreviewed_personal_information: true
+  no_public_internal_identifiers: true
+  no_raw_slack_teams_github_text: true
+
+coverage_policy:
+  implemented_in_this_pr: false
+  future_statuses:
+    - supported
+    - partially_supported
+    - unsupported
+    - contradicted
+    - requires_review
+  coverage_status_may_promote_claim: false
+  coverage_status_may_approve_view: false
+  coverage_status_may_create_career_knowledge: false
+  unsupported_claim_requires_review: true
+  contradicted_claim_requires_review: true
+
+manifest_boundary:
+  implemented_in_this_pr: false
+  evidence_refs_may_appear_as_audit_metadata: true
+  evidence_refs_may_generate_text: false
+  evidence_refs_may_resolve_raw_source_for_public_output: false
+  manifest_is_not_source_of_truth: true
+
+current_scope:
+  define_evidence_traceability_policy: true
+  implement_evidence_db: false
+  implement_resolver: false
+  implement_raw_source_resolver: false
+  implement_coverage_checker: false
+  implement_unsupported_claim_checker: false
+  implement_manifest: false
+  implement_cli: false
+  create_evidence_data: false
+  modify_source_sync: false
+  modify_career_knowledge_store: false
+  create_generated_output: false
+
+future_connections:
+  promotion_decision_record:
+    - evidence_refs_support_accepted_meaning
+  career_knowledge_store:
+    - career_knowledge_entry_traceable_to_evidence_refs
+  claim_builder:
+    - claim_candidate_supported_by_career_knowledge_refs
+    - claim_candidate_audit_trace_to_evidence_refs
+  view_generation:
+    - view_traceability_to_claim_and_knowledge_refs
+  resume_regeneration_policy:
+    - resume_manifest_may_include_evidence_refs_for_audit
+  future_review:
+    - unsupported_claim_review
+    - contradicted_claim_review
+    - evidence_coverage_review

@@ -48,6 +48,8 @@ Markdown / PDF
 
 The Resume-specific branch shown here applies after View Generation inputs have passed purpose-specific approval. Other View types have their own future output paths. The key rule is that Views such as Resume or Portfolio must not come first. Source is structured into reviewable Canonical Events, stored as candidates in `source_sync`, and passed through the Review / Promotion Boundary before Career Knowledge is grown. Only then are downstream Views generated and optionally rendered as formats such as PDF.
 
+Evidence Traceability runs alongside this flow as a cross-cutting audit boundary. It allows Career Knowledge, Claim Candidates, Views, and Resume outputs to retain safe links to supporting Evidence references without passing raw source into Claim Builder, View Generation, Resume regeneration, or rendering. Evidence references are audit metadata, not wording inputs.
+
 ## v0.3.0 Source Intelligence Flow
 
 ```text
@@ -126,9 +128,15 @@ An append-only durable history of Human Review decisions about Canonical Events.
 
 The future durable source of truth for reviewed Career Knowledge, stored under `app/data/career_knowledge/`. It stores future `accepted_meaning` and safe, traceable Evidence references, not a complete Canonical Event or Review Decision Log record. In v0.4.0 only the directory and contract exist: approved decisions are not automatically persisted and no entries are created.
 
+### Evidence Traceability
+
+A cross-cutting audit boundary that records how Career Knowledge meaning and its downstream projections are supported by safe Evidence references. Career Knowledge may be `traceable_to` Evidence references; a Claim Candidate is primarily `supported_by` Career Knowledge references and may carry a direct Evidence `audit_trace`; Views and Resume outputs are `derived_from` reviewed Claim Candidates or Career Knowledge and may retain Evidence references as separate audit metadata.
+
+Evidence Traceability never supplies wording. It cannot resolve or render raw source, private URLs, secrets, credentials, confidential content, unreviewed personal information, raw Slack, Teams, or GitHub text, source file paths, or public internal identifiers. A traceability chain is not Human Review, Career Knowledge approval, Claim approval, View approval, or Resume delivery approval.
+
 ### Claim Builder
 
-A future transformation layer that derives presentation candidates only from reviewed Career Knowledge, `accepted_meaning`, safe Evidence references, and a validated PromotionDecisionRecord. It cannot create or modify Career Knowledge and cannot use `source_sync`, Canonical Events, Review Queue items, Review Decision Log rows, or an `approved` decision alone as direct input. v0.4.0 defines only its boundary and contract; it creates no candidates.
+A future transformation layer that derives presentation candidates only from reviewed Career Knowledge and `accepted_meaning` under a validated PromotionDecisionRecord. Safe Evidence references may accompany a candidate only as audit traceability and cannot generate Claim text. Claim Builder cannot create or modify Career Knowledge and cannot use `source_sync`, Canonical Events, Review Queue items, Review Decision Log rows, or an `approved` decision alone as direct input. v0.4.0 defines only its boundary and contract; it creates no candidates.
 
 ### Claim Candidate
 
@@ -231,6 +239,10 @@ flowchart TD
     X --> V[Structured Resume View]
     V --> W[Renderer]
     W --> L[Markdown / PDF]
+    ET[Evidence Traceability] -. audit only .-> K
+    ET -. audit only .-> S
+    ET -. audit only .-> U
+    ET -. audit only .-> V
 ```
 
 ## Source of Truth Layers
@@ -242,6 +254,7 @@ source_sync: canonical event store
 Review / Promotion Boundary: human-reviewed persistence gate
 Career Knowledge: reviewed long-term knowledge
 Career Knowledge Store: durable store for accepted meaning; boundary only in v0.4.0
+Evidence Traceability: cross-cutting audit boundary; never a generation input or source of truth
 Claim Builder: future transformation from Career Knowledge to presentation candidates; contract only in v0.4.0
 Claim Candidate: non-authoritative presentation candidate requiring review before View use
 View Generation: future purpose-specific projection after Human Review / View Selection; boundary only in v0.4.0

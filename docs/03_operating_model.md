@@ -135,6 +135,20 @@ Review Decision Log is the append-only history of Human Review decisions about C
 - Resume output and wording must never update Career Knowledge, become `accepted_meaning`, or serve as future generation input. Findings return upstream for Human Review and any necessary new Review Decision or Career Knowledge revision.
 - v0.4.0 defines only the policy boundary. It implements no CLI, Resume generation, Structured Resume View, Renderer, lifecycle, manifest, diff, Markdown, PDF, or other generated output.
 
+## Operating Evidence Traceability
+
+- Evidence references are traceability-only. They support audit, Human Review, and future evidence coverage checks.
+- Evidence references are not raw source content and must not be treated as Career Knowledge, Claim Candidates, Views, approval records, or source of truth.
+- Evidence references must not generate Claim, View, Resume, Portfolio, or Interview Story wording or resolve raw content for public output.
+- Traceability metadata must remain separate from public View and Resume content.
+- Evidence references must not expose raw source, source file paths, private URLs, secrets, tokens, credentials, confidential content, raw Slack, Teams, or GitHub text, internal identifiers, or unreviewed personal information.
+- Career Knowledge may retain safe Evidence references. Claim Candidates must derive their meaning from Career Knowledge and may retain direct Evidence references only for audit. Views and Resume outputs derive from reviewed Claim Candidates or Career Knowledge and may retain Evidence references only as audit metadata.
+- The existence of an Evidence Reference or traceability chain must not be treated as Human Review, Career Knowledge approval, Claim approval, View approval, or Resume delivery approval.
+- Future coverage statuses are `supported`, `partially_supported`, `unsupported`, `contradicted`, and `requires_review`. A coverage status alone must not promote a Claim, approve a View, or create Career Knowledge.
+- Unsupported or contradicted Claims must return to review.
+- A future View or Resume Manifest may contain safe Evidence references as audit metadata only. A Manifest must not generate text, resolve raw source for public output, or become source of truth.
+- v0.4.0 defines only this policy boundary. It implements no Evidence DB, resolver, coverage checker, unsupported-claim checker, Manifest, CLI, Evidence data, or generated output.
+
 ## Career Knowledge Promotion Criteria
 
 A Canonical Event is not Career Knowledge. When it is stored in `source_sync`, it is only a reviewable candidate. Promotion Criteria are not a score of how impressive the work is; they are the persistence gate for deciding whether the candidate is safe and useful as reviewed, long-term Career Knowledge.

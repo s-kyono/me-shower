@@ -20,7 +20,13 @@ allowed_future_inputs:
   career_knowledge_entry: true
   accepted_meaning: true
   validated_promotion_decision_record: true
-  safe_evidence_reference: true
+
+traceability_only_inputs:
+  safe_evidence_reference:
+    may_generate_claim_text: false
+    may_resolve_raw_content: false
+    may_replace_career_knowledge: false
+    may_replace_human_review: false
 
 forbidden_inputs:
   raw_source_content: true
@@ -89,5 +95,5 @@ current_scope:
   modify_career_knowledge_store: false
 
 future_connections:
-  v0_5_promotion_decision_record: [accepted_meaning, structured_reviewed_evidence_refs, promotion_ready]
+  v0_5_promotion_decision_record: [accepted_meaning, structured_reviewed_evidence_refs_for_audit, promotion_ready]
   later_view_generation: [select_claim_candidates_for_view, approve_claim_for_view, render_resume_from_approved_claims]
