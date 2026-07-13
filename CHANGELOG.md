@@ -8,6 +8,13 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Evidence Traceability
+  - Defines Evidence Traceability as audit infrastructure rather than generation infrastructure.
+  - Clarifies that Evidence references are traceability-only and must not generate Claim, View, or Resume wording.
+  - Prevents raw source content, private URLs, secrets, confidential content, and unreviewed personal information from being exposed through traceability.
+  - Defines future links from Career Knowledge, Claim Candidates, Views, Resume outputs, and Manifests to Evidence references for audit purposes.
+  - Defers Evidence DB, resolver, coverage checker, manifest, CLI, and actual Evidence data to future phases.
+
 - Resume Regeneration Policy
   - Defines Resume as a View rather than Career Knowledge or source of truth.
   - Adds policy boundaries for when Resume Views may and may not be regenerated.

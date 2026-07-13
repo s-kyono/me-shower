@@ -26,6 +26,8 @@ View Generation は、レビュー済み Career Knowledge と reviewed Claim Can
 
 Resume Regeneration Policy は、レビュー済み Career Knowledge と reviewed Claim Candidate から Resume View をいつ再生成できるかを定義します。Resume は View であり、Career Knowledge や source of truth ではありません。v0.4.0 ではポリシー境界のみを定義し、Resume、Markdown、PDF、その他の output は生成しません。再生成後の Resume は draft であり、delivery 前にレビューが必要です。
 
+Evidence Traceability は、Career Knowledge、Claim Candidates、Views、Resume outputs を Evidence references に監査可能な形で接続する方針を定義します。Evidence references は traceability-only であり、文言を生成せず、raw source content を公開しません。v0.4.0 ではポリシー境界だけを定義し、Evidence DB、resolver、coverage checker、Manifest、CLI、Evidence実データ、generated output は実装しません。
+
 ## ディレクトリ構成
 
 ```text
