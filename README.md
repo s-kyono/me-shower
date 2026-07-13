@@ -24,6 +24,8 @@ Claim Builder は、レビュー済み Career Knowledge を View 向けの表現
 
 View Generation は、レビュー済み Career Knowledge と reviewed Claim Candidate を用途別 View へ投影する将来レイヤーです。新しい事実・因果・貢献範囲・意味は作らず、Evidence reference は追跡専用です。用途別承認は安全制約を上書きせず、不足情報はAIで補完しません。v0.4.0 では境界と View 種別だけを定義し、Resume、PDF、Portfolio、Interview Story、その他の generated output は生成しません。View Generationは将来のstructured Viewまでを担当し、PDFは別Rendererのrender formatです。
 
+Resume Regeneration Policy は、レビュー済み Career Knowledge と reviewed Claim Candidate から Resume View をいつ再生成できるかを定義します。Resume は View であり、Career Knowledge や source of truth ではありません。v0.4.0 ではポリシー境界のみを定義し、Resume、Markdown、PDF、その他の output は生成しません。再生成後の Resume は draft であり、delivery 前にレビューが必要です。
+
 ## ディレクトリ構成
 
 ```text

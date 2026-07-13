@@ -177,6 +177,12 @@ Every View requires a target type, a Career Knowledge reference, and purpose-spe
 
 View Generation outputs a future structured View; a separate Renderer may render it as Markdown, HTML, or PDF without changing accepted meaning. Missing inputs, conflicting Claims, unknown facts, and unresolved risks must not be filled by AI and instead fail closed or return to review.
 
+## Resume Regeneration Policy
+
+Resume Regeneration Policy controls when a Resume View may be regenerated and which reviewed, purpose-specific inputs may be used. Resume is a View: it is not Career Knowledge, a Claim Candidate, or source of truth. Previous Resume output, generated PDF, raw source, `source_sync`, Review Decision Log rows, approved decisions alone, and unreviewed Claim Candidates cannot be used to regenerate it.
+
+A regenerated Resume is draft output until it passes review for delivery. Resume wording must preserve accepted meaning and must never flow back into Career Knowledge. If Resume review finds a problem, the finding returns upstream for Human Review and any necessary new Review Decision or Career Knowledge revision; the Resume itself is never promoted into knowledge. v0.4.0 defines only this policy boundary and creates no Resume or rendered output.
+
 ## Non-Goals
 
 This section defines what me-shower is not trying to become.

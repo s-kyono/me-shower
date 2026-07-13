@@ -4,9 +4,16 @@ All notable changes to this project are documented in this file.
 
 ---
 
-## [v0.4.0] - 2026-07-12
+## [v0.4.0] - 2026-07-13
 
 ### Added
+
+- Resume Regeneration Policy
+  - Defines Resume as a View rather than Career Knowledge or source of truth.
+  - Adds policy boundaries for when Resume Views may and may not be regenerated.
+  - Prevents Resume regeneration from `source_sync`, Review Decision Log rows, approved decisions alone, unreviewed Claim Candidates, previous Resume output, or generated PDFs.
+  - Clarifies that regenerated Resume output is draft and requires review before delivery.
+  - Prevents Resume wording and output from flowing back into Career Knowledge.
 
 - View Generation boundary
   - Defines View Generation as the future projection layer from Career Knowledge and reviewed Claim Candidates to purpose-specific Views.
