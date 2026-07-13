@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Claim Builder is the future transformation layer that turns reviewed Career Knowledge into presentation candidates for downstream Views. v0.4.0 defines its responsibility boundary, constraints, and draft contract. It does not generate or persist candidates.
+Claim Builder defines the future transformation boundary for deriving presentation candidates from reviewed Career Knowledge for downstream Views. v0.4.0 defines its responsibility boundary, constraints, and draft contract. It does not generate or persist candidates.
 
 ## Responsibilities and Boundaries
 
@@ -57,7 +57,7 @@ Draft flags are `unsupported_claim`, `evidence_missing`, `ai_inference_risk`, `r
 
 ## Downstream Relationships
 
-Career Knowledge Store remains the source of truth. Claim Builder is read-only with respect to it, and candidates must never be written back as Career Knowledge. View Generation follows Human Review or View Selection and remains non-authoritative.
+Career Knowledge Store remains the future source-of-truth boundary. A future Claim Builder implementation must be read-only with respect to it, and candidates must never be written back as Career Knowledge. View Generation follows Human Review or View Selection and remains non-authoritative.
 
 ## v0.5.0 Dependency
 

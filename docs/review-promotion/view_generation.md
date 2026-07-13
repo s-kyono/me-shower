@@ -2,7 +2,7 @@
 
 ## Purpose
 
-View Generation is the future projection layer that turns Career Knowledge and reviewed Claim Candidates into purpose-specific Views. v0.4.0 defines only its responsibility boundary, input and output constraints, View types, and safety rules. It does not generate a View.
+View Generation defines the future projection boundary for projecting Career Knowledge and reviewed Claim Candidates into purpose-specific Views. v0.4.0 defines only its responsibility boundary, input and output constraints, View types, and safety rules. It does not generate a View.
 
 ## What View Generation Is
 
@@ -130,7 +130,7 @@ If a View exposes an error or missing detail, its wording must not flow back int
 
 ## Relationship to Claim Builder
 
-Claim Builder creates presentation candidates from Career Knowledge. View Generation runs only after Human Review or View Selection has approved a candidate for the specific View context. An unreviewed candidate and a generic `approved_for_view` status without purpose-specific authorization are insufficient.
+The Claim Builder boundary defines future derivation of presentation candidates from Career Knowledge. A future View Generation implementation may run only after Human Review or View Selection has approved a candidate for the specific View context. An unreviewed candidate and a generic `approved_for_view` status without purpose-specific authorization are insufficient.
 
 ## Relationship to Resume Regeneration Policy
 

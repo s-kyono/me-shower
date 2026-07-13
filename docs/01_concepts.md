@@ -4,6 +4,35 @@ This document defines the core concepts behind me-shower.
 
 Its purpose is to keep the system centered on **Career Knowledge** rather than on output formats, agent workflows, or generated artifacts.
 
+## v0.4.0 Review & Promotion
+
+v0.4.0 makes the promotion boundary explicit. It defines the policy and architecture boundary between Canonical Events and future Career Knowledge persistence; it does not implement the entire runtime flow.
+
+```text
+v0.3.0: Source → Canonical Event
+v0.4.0: Canonical Event → Review Queue → Human Review → Decision → Promotion Boundary
+v0.5.0+: PromotionDecisionRecord → Career Knowledge persistence → Claim / View / Resume generation
+```
+
+Career Knowledge is the center of this model. The Career Knowledge Store defines the future source-of-truth boundary for reviewed, accepted career meaning, and v0.4.0 prepares promotion into that boundary. v0.4.0 does not complete Career Knowledge persistence, create Career Knowledge data, or implement downstream Claim, View, or Resume generation.
+
+The following distinctions are mandatory:
+
+- Source is not Career Knowledge.
+- Canonical Event is not Career Knowledge.
+- Review Queue is not Review Decision.
+- Review Decision is not PromotionDecisionRecord.
+- Evidence Traceability is not generation infrastructure.
+- Rejection / Defer Reason is not Career Knowledge.
+- Claim Candidate is not Career Knowledge.
+- View is not source of truth.
+- Resume is not source of truth.
+- Generated output is not source of truth.
+
+Resume is a View. PDF is a render artifact. Generated Markdown is an output artifact. None of them becomes Career Knowledge.
+
+The consolidated v0.4.0 responsibility map, scope, and v0.5.0 handoff are defined in [v0.4.0 Review & Promotion Concept](review-promotion/v0_4_0_concept.md).
+
 ## Career Knowledge
 
 Career Knowledge is the primary asset me-shower is designed to grow.
@@ -36,13 +65,13 @@ Views
 
 ## Career Knowledge Store
 
-Career Knowledge Store is the future source of truth for reviewed Career Knowledge. It is downstream of Human Review and Review Decision Log and stores only the meaning a human accepted, supported by safe and traceable Evidence references.
+Career Knowledge Store defines the future source-of-truth boundary for reviewed Career Knowledge. It is downstream of Human Review and Review Decision Log and is intended to persist only the meaning a human accepted, supported by safe and traceable Evidence references.
 
 It does not store raw Canonical Events, Source, Review Queue items, Review Decision Log records as knowledge, Resume wording, or generated output. In v0.4.0, `app/data/career_knowledge/` is only an empty storage boundary; no approved decision is automatically persisted because the current decision record does not yet contain `accepted_meaning`.
 
 ## Claim Builder
 
-Claim Builder is a future transformation layer between Career Knowledge and Views. It turns reviewed Career Knowledge and its accepted meaning into presentation candidates that may later be considered for a Resume, Portfolio, Interview Story, or another View.
+Claim Builder defines the future transformation boundary between Career Knowledge and Views. A future implementation may derive presentation candidates from reviewed Career Knowledge and its accepted meaning for later consideration in a Resume, Portfolio, Interview Story, or another View.
 
 Claim Builder does not create or modify Career Knowledge, Source, Evidence, Review Decisions, or Resume output. It must not derive candidates directly from `source_sync`, Canonical Events, Review Queue items, Review Decision Log rows, or an `approved` decision alone. v0.4.0 defines only this boundary and a draft contract; it generates and persists no Claim Candidates.
 
@@ -183,7 +212,7 @@ PDF is not a View type. It is one render format that may be used for a View such
 
 ## View Generation
 
-View Generation is the future projection layer from Career Knowledge and reviewed Claim Candidates to Views. It runs only after Human Review or View Selection has approved a candidate for a specific use; approval for Resume use does not imply approval for Portfolio or Interview Story use.
+View Generation defines the future projection boundary from Career Knowledge and reviewed Claim Candidates to Views. A future implementation may run only after Human Review or View Selection has approved a candidate for a specific use; approval for Resume use does not imply approval for Portfolio or Interview Story use.
 
 View Generation does not create or modify Career Knowledge, does not turn a Claim Candidate into Career Knowledge, and does not read `source_sync`, Review Decision Log rows, an approved decision alone, or an unreviewed Claim Candidate directly. `accepted_meaning` is accessed only through a Career Knowledge Entry; it is not sufficient alone. Safe Evidence references are traceability-only and cannot be resolved or used to generate text.
 
@@ -191,7 +220,7 @@ View Generation may select, reorder, summarize, and adjust tone only when meanin
 
 Every View requires a target type, a Career Knowledge reference, and purpose-specific permission. Structural facts may be projected directly from Career Knowledge, while claim-like wording requires a reviewed Claim Candidate. Attribution, scope, numbers, time, qualifiers, uncertainty, causality, and semantic category must be preserved. Approval never overrides safety, audit metadata is not View content, and personal information is excluded unless a separate explicit policy allows it.
 
-View Generation outputs a future structured View; a separate Renderer may render it as Markdown, HTML, or PDF without changing accepted meaning. Missing inputs, conflicting Claims, unknown facts, and unresolved risks must not be filled by AI and instead fail closed or return to review.
+The boundary specifies a future structured View output and a separate Renderer contract for Markdown, HTML, or PDF without changing accepted meaning. Missing inputs, conflicting Claims, unknown facts, and unresolved risks must not be filled by AI and instead fail closed or return to review.
 
 ## Resume Regeneration Policy
 

@@ -4,6 +4,17 @@ This document describes how me-shower should be operated day to day.
 
 The goal is not to produce Resume output after every change. The goal is to continuously grow inspectable Career Knowledge from work traces while preserving evidence boundaries and Human Review.
 
+## v0.4.0 Operating Principles
+
+v0.4.0 is a Review & Promotion policy and architecture boundary release. It adds no Career Knowledge entries, reason records, generated output, or new runtime and CLI workflow.
+
+- Human Review before persistence: no Canonical Event or Review Decision alone becomes Career Knowledge.
+- Evidence before Claims: reviewed Career Knowledge is the future wording input; Evidence References remain audit-only and must not generate wording.
+- Reason before retry: rejected, deferred, needs-more-evidence, and policy-blocked outcomes require a safe reason and an explicit re-review trigger.
+- No generated output as source of truth: View, Resume, generated Markdown, and PDF remain disposable downstream artifacts.
+- No raw, private, or confidential source data downstream: Claim, View, Resume, render, and audit output must not expose or use unsafe source content.
+- No implied implementation: v0.4.0 defines boundaries; PromotionDecisionRecord, persistence, validators, and downstream generation remain future work.
+
 ## Daily Inputs
 
 - GitHub: implementation, Pull Requests, change history
@@ -59,7 +70,7 @@ The operating rule is:
 ```text
 AI proposes.
 Human reviews.
-Career Knowledge persists.
+Future persistence records only accepted Career Knowledge meaning.
 ```
 
 The review and promotion path is:
@@ -114,7 +125,7 @@ Review Decision Log is the append-only history of Human Review decisions about C
 
 ## Operating View Generation
 
-- View Generation may generate text only from Career Knowledge Entries and reviewed Claim Candidates under purpose-specific View Selection or View Approval.
+- A future View Generation implementation may derive text only from Career Knowledge Entries and reviewed Claim Candidates under purpose-specific View Selection or View Approval.
 - Every request requires a target View type, a Career Knowledge Entry reference, and purpose-specific View permission. These are conditional rules, not a requirement that every allowed input always be present.
 - Career Knowledge may directly supply structural facts such as periods, affiliations, roles, technologies, and chronology. Claim-like wording requires a reviewed Claim Candidate and must not be inferred from structural fields alone.
 - `accepted_meaning` must be accessed through its Career Knowledge Entry. It is not sufficient alone and must not bypass Career Knowledge Store.
@@ -129,7 +140,7 @@ Review Decision Log is the append-only history of Human Review decisions about C
 - Personal information is excluded by default. It must not be inferred, obtained from unreviewed Source, or added by projection; a View that needs it requires a separate explicit policy.
 - `timeline_view` chronologically projects reviewed Career Knowledge and non-resolvable traceability metadata. It is not Source Timeline, does not read `source_sync`, and does not render Source content.
 - PDF is a render format, not a View type. Resume is a View that may be rendered as Markdown, HTML, or PDF.
-- View Generation produces a future structured View. A separate Renderer produces Markdown, HTML, or PDF and must not change accepted meaning. Neither component is implemented in v0.4.0.
+- The View Generation boundary specifies a future structured View, and the Renderer boundary specifies Markdown, HTML, or PDF rendering without changing accepted meaning. Neither component is implemented in v0.4.0.
 - Missing permission or Career Knowledge references rejects generation. Conflicting Claims and unresolved risks return to review; unknown facts are omitted or reviewed, never filled by AI.
 - A View must never become a source of truth, Career Knowledge, or a Claim Candidate. Resume is a View, not an authoritative record.
 - View output and wording must never flow back into Career Knowledge, `accepted_meaning`, Source, Evidence, or Claim support. A discovered issue must be routed to an upstream review request for Human Review and any necessary new Review Decision or Career Knowledge revision.
@@ -203,6 +214,7 @@ These records are not interchangeable. A Daily Report or Daily Digest is Source,
 - `generated/` should generally stay out of normal PR scope
 - Timeline, PDF, and Resume previews are regenerable artifacts
 - generated output must not become source of truth
+- generated Markdown is an output artifact, PDF is a render artifact, and Resume is a View; none becomes Career Knowledge
 
 Outputs are disposable compared with the underlying knowledge structure.
 
