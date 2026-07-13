@@ -84,6 +84,14 @@ An Evidence Reference is a safe, traceability-only reference, not raw source con
 
 Traceability records a support relationship; it does not establish review or approval. The existence of an Evidence Reference does not mean Human Review is complete, and the existence of a traceability chain does not approve Career Knowledge, a Claim Candidate, a View, or Resume delivery. Those decisions remain separate at their respective layers.
 
+## Rejection / Defer Reason
+
+Rejection / Defer Reason is audit metadata that explains why a review outcome is `rejected`, `deferred`, `needs_more_evidence`, or blocked by policy. It is not Source, Evidence, source of truth, Career Knowledge, a Claim Candidate, a View, Resume content, or a generation input.
+
+`rejected` means the current review does not promote the candidate; it does not delete the candidate. `deferred` means the current decision is postponed; it does not mean approval will happen later. `needs_more_evidence` means support is insufficient; it does not mean Evidence exists or that the candidate is supported. A policy block stops processing until the blocking condition is resolved and must not be retried automatically.
+
+Reason codes and safe explanations may support audit and a future explicit re-review request. They must not generate Claim, View, Resume, Portfolio, or Interview Story wording, and must not be treated as Evidence or approval. Reopening requires an explicit trigger, never implies approval, and cannot bypass Human Review.
+
 ## Canonical Event
 
 Canonical Event is a reviewable event extracted from Source.

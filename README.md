@@ -28,6 +28,8 @@ Resume Regeneration Policy は、レビュー済み Career Knowledge と reviewe
 
 Evidence Traceability は、Career Knowledge、Claim Candidates、Views、Resume outputs を Evidence references に監査可能な形で接続する方針を定義します。Evidence references は traceability-only であり、文言を生成せず、raw source content を公開しません。v0.4.0 ではポリシー境界だけを定義し、Evidence DB、resolver、coverage checker、Manifest、CLI、Evidence実データ、generated output は実装しません。
 
+Rejection / Defer Reason は、`rejected`、`deferred`、`needs_more_evidence`、policy block の安全な理由カテゴリを定義します。Reason は監査metadataであり、Career Knowledge、source of truth、生成入力ではありません。v0.4.0 ではポリシー境界だけを定義し、Review UI、CLI、reason records、実データ、generated output は実装しません。
+
 ## ディレクトリ構成
 
 ```text

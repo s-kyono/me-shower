@@ -8,6 +8,13 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Rejection / Defer Reason
+  - Defines safe reason categories for rejected, deferred, needs_more_evidence, and blocked review outcomes.
+  - Clarifies that reasons are audit metadata rather than Career Knowledge, Claim Candidates, Views, or generation inputs.
+  - Prevents rejection or defer reasons from generating Claim, View, Resume, Portfolio, or Interview Story wording.
+  - Defines re-review boundaries for rejected, deferred, needs_more_evidence, and blocked_by_policy outcomes.
+  - Defers Review UI, CLI, reason records, Review Decision Log runtime changes, and actual data changes to future phases.
+
 - Evidence Traceability
   - Defines Evidence Traceability as audit infrastructure rather than generation infrastructure.
   - Clarifies that Evidence references are traceability-only and must not generate Claim, View, or Resume wording.

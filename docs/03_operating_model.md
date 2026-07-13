@@ -80,6 +80,19 @@ Review Queue only organizes candidates and exposes missing Evidence, traceabilit
 
 Review Decision Log is the append-only history of Human Review decisions about Canonical Events. It is not Source, Review Queue, Career Knowledge, or `CHANGELOG.md`. Even `approved` only records that the event may be treated as a future Career Knowledge candidate; it does not persist Career Knowledge in v0.4.0. Existing decisions are never overwritten or deleted. A changed judgment is recorded as a new decision; formal supersession belongs to PromotionDecisionRecord v0.5.0.
 
+## Operating Rejection / Defer Reasons
+
+- `rejected` items are not deleted and are not eligible for promotion in the current review.
+- `deferred` items are not approved later by default. They require an explicit re-review trigger.
+- `needs_more_evidence` means support or traceability is insufficient; it does not assert that Evidence exists or that the subject is supported.
+- `blocked_by_policy` stops processing and automatic retry until the safety, privacy, confidentiality, or scope block is resolved.
+- Reason codes and minimal safe explanations describe outcomes as audit metadata. They are not Source, Evidence, approval, source of truth, Career Knowledge, Claim Candidates, or Views.
+- Reasons must never generate Claim, View, Resume, Portfolio, or Interview Story wording.
+- Reasons must not expose raw Source, raw Slack, Teams, or GitHub text, private URLs, secrets, credentials, confidential content or project names, public internal identifiers, or unreviewed personal information.
+- Reopening requires an explicit trigger such as new Evidence or traceability, Human clarification, resolved safety risk, resolved policy block, or a changed duplicate relationship.
+- Reopening starts another Human Review. It does not imply approval and must not auto-approve the subject.
+- v0.4.0 defines only the reason categories and safety boundary. It implements no UI, CLI, reason records, automatic re-review, runtime changes, data changes, or generated output.
+
 ## Operating Career Knowledge Store
 
 - An `approved` decision alone is not sufficient to write Career Knowledge in v0.4.0.
