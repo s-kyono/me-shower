@@ -23,10 +23,15 @@ source_sync
     ↓
 Review Queue
     ↓
-Human Review
-    ↓
-Review Decision Log
-    ↓
+Human Review / Promotion Boundary
+    ├── blocked_by_policy → Rejection / Defer Reason (audit only; no retry)
+    └── review completed
+            ↓
+        Review Decision Log
+            ├── approved → future accepted meaning
+            └── rejected / deferred / needs_more_evidence
+                    ↓
+                Rejection / Defer Reason (audit only; no promotion)
 Career Knowledge Store
     ↓
 Claim Builder
@@ -49,6 +54,8 @@ Markdown / PDF
 The Resume-specific branch shown here applies after View Generation inputs have passed purpose-specific approval. Other View types have their own future output paths. The key rule is that Views such as Resume or Portfolio must not come first. Source is structured into reviewable Canonical Events, stored as candidates in `source_sync`, and passed through the Review / Promotion Boundary before Career Knowledge is grown. Only then are downstream Views generated and optionally rendered as formats such as PDF.
 
 Evidence Traceability runs alongside this flow as a cross-cutting audit boundary. It allows Career Knowledge, Claim Candidates, Views, and Resume outputs to retain safe links to supporting Evidence references without passing raw source into Claim Builder, View Generation, Resume regeneration, or rendering. Evidence references are audit metadata, not wording inputs.
+
+Rejection / Defer Reason sits beside a non-approved Review or Promotion Decision and explains it as audit metadata. `rejected`, `deferred`, `needs_more_evidence`, and policy-blocked subjects do not flow into Career Knowledge or Claim Builder through their reasons. Reason codes and explanations are never wording inputs.
 
 ## v0.3.0 Source Intelligence Flow
 
@@ -123,6 +130,12 @@ A generated worklist derived directly from Canonical Events in `source_sync`. It
 ### Review Decision Log
 
 An append-only durable history of Human Review decisions about Canonical Events. The Canonical Event reference is primary and a Review Queue `queue_id` is optional context. It does not mutate Source or Review Queue and does not create Career Knowledge; an `approved` record remains only a future promotion candidate in v0.4.0.
+
+### Rejection / Defer Reason
+
+Audit metadata that safely explains a `rejected`, `deferred`, `needs_more_evidence`, or policy-blocked outcome. It classifies the decision without deleting the subject, scheduling future approval, asserting that Evidence exists, or becoming Career Knowledge. Reasons must not flow to Claim Builder, View Generation, Resume regeneration, Portfolio, or Interview Story wording.
+
+Reason explanations contain only the minimum safe context. They must not expose raw Source, private URLs, secrets, credentials, confidential content or project names, raw Slack, Teams, or GitHub text, internal identifiers, or unreviewed personal information. Re-review requires an explicit trigger and a new Human Review; a policy block additionally requires policy resolution. Reopening is not approval.
 
 ### Career Knowledge Store
 
@@ -231,6 +244,8 @@ flowchart TD
     J --> Q[Review Decision Log]
     Q -.->|future accepted meaning| K[Career Knowledge Store]
     Q -->|rejected / deferred / needs more evidence| N[Non-promoted decision]
+    J -->|blocked by policy| N
+    N -. audit explanation .-> RR[Rejection / Defer Reason]
     K --> R[Claim Builder]
     R --> S[Claim Candidates]
     S --> T[Human Review / View Selection]
@@ -255,6 +270,7 @@ Review / Promotion Boundary: human-reviewed persistence gate
 Career Knowledge: reviewed long-term knowledge
 Career Knowledge Store: durable store for accepted meaning; boundary only in v0.4.0
 Evidence Traceability: cross-cutting audit boundary; never a generation input or source of truth
+Rejection / Defer Reason: audit metadata for non-approved outcomes; never Career Knowledge or wording input
 Claim Builder: future transformation from Career Knowledge to presentation candidates; contract only in v0.4.0
 Claim Candidate: non-authoritative presentation candidate requiring review before View use
 View Generation: future purpose-specific projection after Human Review / View Selection; boundary only in v0.4.0

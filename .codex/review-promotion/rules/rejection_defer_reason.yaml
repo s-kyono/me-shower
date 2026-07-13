@@ -1,0 +1,130 @@
+version: rejection_defer_reason_v0_4
+description: Defines safe reason categories and boundaries for rejected, deferred, needs_more_evidence, and blocked review outcomes.
+
+reason_role:
+  audit_metadata: true
+  source_of_truth: false
+  career_knowledge: false
+  claim_candidate: false
+  view: false
+  resume: false
+  generation_input: false
+
+status_semantics:
+  rejected:
+    deleted: false
+    approved: false
+    career_knowledge: false
+    may_be_reopened_with_explicit_trigger: true
+  deferred:
+    approved_later_by_default: false
+    approved: false
+    requires_explicit_trigger: true
+  needs_more_evidence:
+    evidence_exists: false
+    supported: false
+    approved: false
+    requires_new_evidence_or_traceability: true
+  blocked_by_policy:
+    approved: false
+    auto_retry_allowed: false
+    requires_policy_resolution: true
+
+rejection_reasons:
+  unsupported_by_evidence: true
+  contradicted_by_evidence: true
+  overstates_contribution: true
+  ambiguous_meaning: true
+  not_career_relevant: true
+  duplicate_or_subsumed: true
+  outside_scope: true
+  contains_raw_source_risk: true
+  contains_confidential_content: true
+  contains_private_url: true
+  contains_secret_or_credential: true
+  contains_personal_information_risk: true
+  violates_policy: true
+
+defer_reasons:
+  needs_human_clarification: true
+  needs_source_cleanup: true
+  needs_semantic_review: true
+  needs_safety_review: true
+  waiting_for_related_decision: true
+  depends_on_future_policy: true
+  insufficient_context: true
+  unclear_career_relevance: true
+
+needs_more_evidence_reasons:
+  missing_evidence_reference: true
+  insufficient_evidence_coverage: true
+  evidence_conflict_requires_review: true
+  evidence_traceability_missing: true
+  source_not_reviewed: true
+  support_edge_missing: true
+
+blocked_by_policy_reasons:
+  raw_source_leakage_risk: true
+  confidential_content_risk: true
+  personal_information_risk: true
+  secret_or_credential_risk: true
+  private_url_risk: true
+  unsafe_public_disclosure: true
+  outside_current_scope: true
+  requires_future_policy: true
+
+forbidden_uses:
+  reason_to_career_knowledge: true
+  reason_to_claim_wording: true
+  reason_to_view_wording: true
+  reason_to_resume_wording: true
+  reason_to_portfolio_wording: true
+  reason_to_interview_story_wording: true
+  reason_as_evidence: true
+  reason_as_approval: true
+  reason_as_source_of_truth: true
+
+reason_safety:
+  no_raw_source_content: true
+  no_private_urls: true
+  no_secret_values: true
+  no_credentials: true
+  no_confidential_content: true
+  no_unreviewed_personal_information: true
+  no_raw_slack_teams_github_text: true
+  no_public_internal_identifiers: true
+
+re_review_policy:
+  rejected_may_be_reopened: true
+  deferred_requires_explicit_trigger: true
+  needs_more_evidence_requires_new_evidence_or_traceability: true
+  blocked_by_policy_requires_policy_resolution: true
+  reopened_is_not_approved: true
+  auto_approval_after_reopen: false
+
+current_scope:
+  define_reason_categories: true
+  implement_cli: false
+  create_reason_records: false
+  modify_review_decision_log_runtime: false
+  modify_career_knowledge_store: false
+  generate_claims: false
+  generate_views: false
+  generate_resume: false
+  create_generated_output: false
+
+future_connections:
+  review_decision_log:
+    - reason_codes
+    - safe_explanation
+  evidence_traceability:
+    - unsupported_by_evidence
+    - contradicted_by_evidence
+    - needs_more_evidence
+  future_review:
+    - re_review_request
+    - safety_review
+    - semantic_review
+  future_promotion_decision_record:
+    - rejection_reason_snapshot
+    - defer_reason_snapshot
