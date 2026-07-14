@@ -22,7 +22,7 @@ me-shower は、仕事の痕跡・証跡・Human Review から Career Knowledge 
 
 v0.4.0 Review & Promotion は、Canonical Events と将来の Career Knowledge persistence の間の境界を定義します。Promotion Criteria、Review Queue、Review Decision Log、Career Knowledge Store、Claim / View / Resume、Evidence Traceability、Rejection / Defer Reason の各境界を一貫した policy / architecture として整理します。
 
-v0.4.0 は境界定義のリリースであり、PromotionDecisionRecord persistence、Career Knowledge 実データ、Evidence DB、Reason Record、downstream generation、CLI workflow、generated output を完成実装しません。Career Knowledge Store は reviewed career meaning の将来の source-of-truth boundary であり、Resume、View、Claim Candidate、Evidence Reference、Reason、Review Queue、generated Markdown、PDF は Career Knowledge の source of truth ではありません。
+v0.4.0 は境界定義のリリースです。Review Queue / Review Decision Log のMVP CLIと、破棄・再生成可能なgenerated review queueは存在しますが、complete end-to-end promotion and persistence CLI workflow、PromotionDecisionRecord persistence、Career Knowledge 実データ、Evidence DB、Reason Record、downstream generationは完成実装しません。Generated review queueはCareer Knowledgeでもsource of truthでもありません。Career Knowledge Store は reviewed career meaning の将来のsource-of-truth boundaryであり、Resume、View、Claim Candidate、Evidence Reference、Reason、Review Queue、generated Markdown、PDFもCareer Knowledgeのsource of truthではありません。
 
 統合した概念と v0.5.0 への handoff は `docs/review-promotion/v0_4_0_concept.md` を参照してください。
 
@@ -205,11 +205,11 @@ Timeline item を CLI で確認します。`--from` / `--to` / `--source-type` /
 
 ### `uv run me-shower build-review-queue` / `inspect-review-queue`
 
-Review Queue is a generated worklist for Human Review. It is not Career Knowledge. It does not approve or reject candidates, and it does not mutate `source_sync`. Queue は再生成可能な derived output であり、手編集や source of truth としての利用を前提にしません。
+Review Queue is a generated worklist for Human Review. It is not Career Knowledge. It does not approve or reject candidates, and it does not mutate `source_sync`. Queue は再生成可能な derived output であり、手編集や source of truth としての利用を前提にしません。`blocked_by_policy` itemではsummary、actions、decisions、improvements、tags、toolsを出力せず、安全な参照・readiness・blocking reason等のmetadataだけを表示します。
 
 ### `uv run me-shower add-review-decision` / `inspect-review-decisions`
 
-Canonical Event に対する Human Review の結果を `app/data/review_decisions/YYYY-MM-DD.jsonl` へ追記し、status・source ID・review date・件数で確認します。Decision Log は append-only な判断履歴であり、Review Queue、Source、Career Knowledge、`CHANGELOG.md` の代替ではありません。過去の行は編集・削除せず、判断が変わった場合も新しい decision を追加します。`approved` でも Career Knowledge Store には保存しません。
+Canonical Event に対する Human Review の結果を `app/data/review_decisions/YYYY-MM-DD.jsonl` へ追記し、status・source ID・review date・件数で確認します。Decision Log は append-only な判断履歴であり、Review Queue、Source、Career Knowledge、`CHANGELOG.md` の代替ではありません。過去の行は編集・削除せず、判断が変わった場合も新しい decision を追加します。`approved` はHuman Review Decision Logのstatusであり、PromotionDecisionRecord、promotion eligibilityの確定、Career Knowledge persistenceを意味しません。`blocked_by_policy` eventはv0.4.0 MVPでは`approved`にできません。保存する`source_sync_file`はrepo root相対へ正規化されます。
 
 ### `uv run me-shower inspect-daily-report`
 

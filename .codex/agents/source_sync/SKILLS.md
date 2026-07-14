@@ -12,7 +12,6 @@
 - `.codex/steering_sheets/career_profile.md`
 - `.codex/steering_sheets/work_history.md`
 - `.codex/steering_sheets/review_notes.md`
-- `.codex/steering_sheets/change_log.md`
 - 必要な場合のみ移行前の参照PDF
 
 ## 守るべき思想

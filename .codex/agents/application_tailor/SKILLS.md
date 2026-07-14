@@ -11,7 +11,6 @@
 - `.codex/steering_sheets/career_profile.md`
 - `.codex/steering_sheets/work_history.md`
 - `.codex/steering_sheets/review_notes.md`
-- `.codex/steering_sheets/change_log.md`
 - 応募先の求人票またはユーザーが貼り付けた募集情報
 
 ## 守るべき思想

@@ -13,6 +13,7 @@ All notable changes to this project are documented in this file.
   - Summarizes the roles of Promotion Criteria, Review Queue, Review Decision Log, Career Knowledge Store, Claim Builder, View Generation, Resume Regeneration Policy, Evidence Traceability, and Rejection / Defer Reason.
   - Clarifies source-of-truth boundaries: Resume, Views, Claim Candidates, Evidence references, reasons, Review Queue items, and generated artifacts are not Career Knowledge.
   - Distinguishes v0.4.0 policy boundaries from v0.5.0+ implementation work such as PromotionDecisionRecord, persistence contracts, Evidence schemas, Reason schemas, validators, and runtime workflows.
+  - Clarifies that MVP Review Queue and Review Decision Log commands and a disposable generated review worklist exist, while the complete end-to-end promotion and persistence CLI workflow remains unimplemented.
 
 - Rejection / Defer Reason
   - Defines safe reason categories for rejected, deferred, needs_more_evidence, and blocked review outcomes.
@@ -62,12 +63,14 @@ All notable changes to this project are documented in this file.
   - Adds `approved`, `rejected`, `deferred`, and `needs_more_evidence` decision records.
   - Keeps Review Decision Log separate from Career Knowledge and Review Queue.
   - Requires reasons for all decisions and Evidence references for approved decisions.
+  - Rejects `approved` for `blocked_by_policy` Canonical Events and normalizes stored source file references to repository-relative paths.
 
 - Review Queue derived worklist
   - Adds a generated review worklist for Canonical Events awaiting Human Review.
   - Defines readiness statuses separate from Promotion Decision statuses.
   - Prevents Review Queue from approving, rejecting, mutating `source_sync`, or creating Career Knowledge.
   - Adds review queue rules for traceability, confidence, confidentiality, and semantic risks.
+  - Omits content fields from `blocked_by_policy` Markdown, JSONL, and inspect output while retaining safe audit metadata.
 
 - Promotion Criteria for Review & Promotion
   - Defines the boundary between Canonical Event and reviewed Career Knowledge.

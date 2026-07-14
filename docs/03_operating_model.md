@@ -6,7 +6,7 @@ The goal is not to produce Resume output after every change. The goal is to cont
 
 ## v0.4.0 Operating Principles
 
-v0.4.0 is a Review & Promotion policy and architecture boundary release. It adds no Career Knowledge entries, reason records, generated output, or new runtime and CLI workflow.
+v0.4.0 is a Review & Promotion policy and architecture boundary release. It includes MVP Review Queue and Review Decision Log commands plus a disposable generated review worklist. It adds no Career Knowledge entries or reason records, and it does not implement the complete end-to-end promotion and persistence CLI workflow or downstream generated Views.
 
 - Human Review before persistence: no Canonical Event or Review Decision alone becomes Career Knowledge.
 - Evidence before Claims: reviewed Career Knowledge is the future wording input; Evidence References remain audit-only and must not generate wording.
@@ -87,9 +87,9 @@ Review Decision Log
 Future Career Knowledge Store
 ```
 
-Review Queue only organizes candidates and exposes missing Evidence, traceability, policy risks, and semantic concerns. Its readiness statuses are `ready_for_review`, `needs_evidence_before_review`, `blocked_by_policy`, and `needs_cleanup`. They are preparation states, never promotion outcomes. The Queue cannot create `approved`, `rejected`, `deferred`, or `needs_more_evidence`; those belong to the Review Decision Log.
+Review Queue only organizes candidates and exposes missing Evidence, traceability, policy risks, and semantic concerns. Its readiness statuses are `ready_for_review`, `needs_evidence_before_review`, `blocked_by_policy`, and `needs_cleanup`. They are preparation states, never promotion outcomes. The Queue cannot create `approved`, `rejected`, `deferred`, or `needs_more_evidence`; those belong to the Review Decision Log. A `blocked_by_policy` worklist item exposes only safe audit metadata and omits summary, actions, decisions, improvements, tags, and tools from generated and inspected output.
 
-Review Decision Log is the append-only history of Human Review decisions about Canonical Events. It is not Source, Review Queue, Career Knowledge, or `CHANGELOG.md`. Even `approved` only records that the event may be treated as a future Career Knowledge candidate; it does not persist Career Knowledge in v0.4.0. Existing decisions are never overwritten or deleted. A changed judgment is recorded as a new decision; formal supersession belongs to PromotionDecisionRecord v0.5.0.
+Review Decision Log is the append-only history of Human Review decisions about Canonical Events. It is not Source, Review Queue, Career Knowledge, or `CHANGELOG.md`. Even `approved` is only a Human Review Decision Log status: it is not a PromotionDecisionRecord, does not confirm promotion eligibility, and does not persist Career Knowledge in v0.4.0. A `blocked_by_policy` event cannot be recorded as `approved` in the v0.4.0 MVP. Existing decisions are never overwritten or deleted. A changed judgment is recorded as a new decision; formal supersession belongs to PromotionDecisionRecord v0.5.0.
 
 ## Operating Rejection / Defer Reasons
 
@@ -202,12 +202,11 @@ The minimum decision model is defined in `.codex/review-promotion/rules/promotio
 
 ## Log Responsibilities
 
-- `CHANGELOG.md`: project-level release and change history
-- `LOG.md`: design rationale, strict review results, and notes that connect to future improvements
+- `CHANGELOG.md`: release-visible project changes, versioned project history, and project-facing changes
 - `app/data/daily_reports/*.md`: daily work, interests, learning, and technology-stack summaries treated as Source input
 - `app/data/review_decisions/YYYY-MM-DD.jsonl`: append-only `approved`, `rejected`, `deferred`, and `needs_more_evidence` Human Review decisions for Canonical Events
 
-These records are not interchangeable. A Daily Report or Daily Digest is Source, not Career Knowledge. It must pass through Source Intelligence, Promotion Criteria, and Human Review before any accepted meaning can become Career Knowledge. `CHANGELOG.md` records project changes, not individual promotion decisions, and `.codex/steering_sheets/change_log.md` is not an official project log.
+These records are not interchangeable. A Daily Report or Daily Digest is Source, not Career Knowledge. It must pass through Source Intelligence, Promotion Criteria, and Human Review before any accepted meaning can become Career Knowledge. `CHANGELOG.md` records project-facing release history, not individual promotion decisions.
 
 ## Handling Generated Output
 
