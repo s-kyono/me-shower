@@ -2933,6 +2933,23 @@ FORBIDDEN_REVIEW_QUEUE_STATUSES = {"approved", "rejected", "deferred", "needs_mo
 SAFE_EVIDENCE_KINDS = {"source_reference", "evidence_ref", "commit_reference", "pr_reference", "file_reference"}
 
 
+def _is_unsafe_reference(value: str) -> bool:
+    normalized = value.strip()
+    if _contains_sensitive_content([normalized]):
+        return True
+    return bool(
+        normalized.startswith(("/", "~/"))
+        or re.match(r"^[A-Za-z]:[\\/]", normalized)
+        or re.match(r"^file://", normalized, flags=re.IGNORECASE)
+        or re.search(
+            r"\b(?:api[_-]?key|token|secret|password|credential)\s*[:=]",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        or ".." in re.split(r"[\\/]", normalized)
+    )
+
+
 def _contains_sensitive_content(values: list[str]) -> bool:
     for value in values:
         _, findings = redact_sensitive_text(value)
@@ -2963,7 +2980,7 @@ def build_review_queue_item(block: str, *, path: Path, event_index: int) -> Revi
         if item.get("kind") in SAFE_EVIDENCE_KINDS
         and item.get("detail")
         and item.get("detail", "").lower() != "none"
-        and not _contains_sensitive_content([item.get("detail", "")])
+        and not _is_unsafe_reference(item.get("detail", ""))
     ]
     evidence_refs = [item["detail"] for item in safe_evidence if item["kind"] != "source_reference"]
     source_references = [item["detail"] for item in safe_evidence if item["kind"] == "source_reference"]
@@ -3073,14 +3090,18 @@ def filter_review_queue_items(
 
 
 def review_queue_item_dict(item: ReviewQueueItem) -> dict[str, Any]:
-    return {
+    payload = {
         "queue_id": item.queue_id, "canonical_event_ref": item.canonical_event_ref,
-        "source_type": item.source_type, "summary": item.summary, "actions": item.actions,
-        "decisions": item.decisions, "improvements": item.improvements, "tags": item.tags,
-        "tools": item.tools, "confidence": item.confidence, "evidence": item.evidence,
+        "source_type": item.source_type, "confidence": item.confidence, "evidence": item.evidence,
         "readiness": item.readiness, "semantic_risks": item.semantic_risks,
         "review_focus": item.review_focus, "review_questions": item.review_questions,
     }
+    if item.readiness["status"] != "blocked_by_policy":
+        payload.update({
+            "summary": item.summary, "actions": item.actions, "decisions": item.decisions,
+            "improvements": item.improvements, "tags": item.tags, "tools": item.tools,
+        })
+    return payload
 
 
 def render_review_queue_jsonl(items: list[ReviewQueueItem]) -> str:
@@ -3095,15 +3116,19 @@ def render_review_queue_markdown(items: list[ReviewQueueItem], *, source_sync_di
     ]
     for item in items:
         ref = item.canonical_event_ref
-        lines.extend([
+        item_lines = [
             f"## {item.queue_id} · {item.readiness['status']}", "",
-            f"**{item.summary}**", "",
+        ]
+        if item.readiness["status"] != "blocked_by_policy":
+            item_lines.extend([f"**{item.summary}**", ""])
+        item_lines.extend([
             f"- canonical_event_ref: `{ref['source_sync_file']}` Event {ref['event_index']} ({ref['event_date']})",
             f"- source_type: `{item.source_type}`", f"- confidence: `{item.confidence['level']}`",
             f"- safe evidence: {', '.join(item.evidence['evidence_refs']) or item.evidence['source_reference'] or 'none'}",
             f"- blocking reasons: {', '.join(item.readiness['blocking_reasons']) or 'none'}",
             f"- review focus: {', '.join(item.review_focus)}", "",
         ])
+        lines.extend(item_lines)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -3143,6 +3168,16 @@ def _validate_review_decision_text(field: str, value: str) -> None:
         raise ValueError(f"{field} must not contain raw source content, secrets, private URLs, or confidential content")
 
 
+def _validate_evidence_refs(evidence_refs: Any) -> list[str]:
+    if not isinstance(evidence_refs, list) or not all(isinstance(value, str) for value in evidence_refs):
+        raise ValueError("evidence_refs must be a list of safe reference strings")
+    normalized = [value.strip() for value in evidence_refs if value.strip()]
+    for value in normalized:
+        if _is_unsafe_reference(value):
+            raise ValueError("evidence_ref must not contain an unsafe evidence or source reference")
+    return normalized
+
+
 def resolve_canonical_event_ref(
     source_sync_path: Path, *, source_sync_file: str, event_index: int,
     source_id: str | None = None, event_date: str | None = None,
@@ -3167,6 +3202,33 @@ def resolve_canonical_event_ref(
     }
 
 
+def normalize_source_sync_reference(source_sync_path: Path) -> str:
+    resolved_path = source_sync_path.resolve()
+    resolved_source_sync_dir = SOURCE_SYNC_DIR.resolve()
+    resolved_repo_root = REPO_ROOT.resolve()
+    try:
+        resolved_path.relative_to(resolved_source_sync_dir)
+    except ValueError as exc:
+        raise ValueError(f"source_sync_file must be under {resolved_source_sync_dir}") from exc
+    try:
+        return resolved_path.relative_to(resolved_repo_root).as_posix()
+    except ValueError as exc:
+        raise ValueError("source_sync_file must be stored as a repository-relative path") from exc
+
+
+def _validate_stored_source_sync_reference(source_sync_file: str) -> None:
+    reference = Path(source_sync_file)
+    expected_prefix = ("app", "data", "source_sync")
+    if (
+        reference.is_absolute()
+        or ".." in reference.parts
+        or reference.parts[:3] != expected_prefix
+        or len(reference.parts) <= len(expected_prefix)
+        or reference.as_posix() != source_sync_file
+    ):
+        raise ValueError("source_sync_file must be a normalized repository-relative path under app/data/source_sync")
+
+
 def create_review_decision(
     *, source_sync_file: str, event_index: int, status: str, reviewer_id: str, reason: str,
     source_id: str | None = None, event_date: str | None = None, queue_id: str | None = None,
@@ -3177,18 +3239,17 @@ def create_review_decision(
         raise ValueError(f"status must be one of: {', '.join(sorted(REVIEW_DECISION_STATUSES))}")
     if not source_sync_file.strip() or event_index < 1:
         raise ValueError("canonical_event_ref requires source_sync_file and a positive event_index")
+    _validate_stored_source_sync_reference(source_sync_file)
     if not reviewer_id.strip():
         raise ValueError("reviewer_id must not be empty")
     if not reason.strip():
         raise ValueError("reason must not be empty")
-    evidence_refs = [value.strip() for value in (evidence_refs or []) if value.strip()]
+    evidence_refs = _validate_evidence_refs(evidence_refs or [])
     if status == "approved" and not evidence_refs:
         raise ValueError("approved decisions require at least one evidence_ref")
     for field, value in [("reviewer_id", reviewer_id), ("reason", reason), ("notes", notes or "")]:
         if value:
             _validate_review_decision_text(field, value)
-    for value in evidence_refs:
-        _validate_review_decision_text("evidence_ref", value)
     reviewed = _parse_reviewed_at(reviewed_at)
     return {
         "schema_version": REVIEW_DECISION_SCHEMA_VERSION,
@@ -3206,6 +3267,11 @@ def create_review_decision(
 
 
 def append_review_decision(record: dict[str, Any], *, decision_log_dir: Path = REVIEW_DECISIONS_DIR) -> Path:
+    canonical_event_ref = record.get("canonical_event_ref")
+    if not isinstance(canonical_event_ref, dict):
+        raise ValueError("review decision requires canonical_event_ref")
+    _validate_stored_source_sync_reference(str(canonical_event_ref.get("source_sync_file") or ""))
+    record["evidence_refs"] = _validate_evidence_refs(record.get("evidence_refs"))
     output_path = decision_log_dir / f"{_parse_reviewed_at(str(record['reviewed_at'])).date().isoformat()}.jsonl"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("a", encoding="utf-8") as stream:
@@ -3851,7 +3917,11 @@ def inspect_review_queue(
         ref = item.canonical_event_ref
         typer.echo("")
         typer.echo(f"{item.queue_id} [{item.readiness['status']}] {ref['event_date']} {item.source_type}")
-        typer.echo(f"- {item.summary}")
+        if item.readiness["status"] != "blocked_by_policy":
+            typer.echo(f"- {item.summary}")
+        else:
+            typer.echo(f"  safe_evidence: {', '.join(item.evidence['evidence_refs']) or item.evidence['source_reference'] or 'none'}")
+            typer.echo(f"  blocking_reasons: {', '.join(item.readiness['blocking_reasons'])}")
         typer.echo(f"  canonical_event_ref: {ref['source_sync_file']} Event {ref['event_index']}")
 
 
@@ -3859,7 +3929,11 @@ def inspect_review_queue(
 def add_review_decision_command(
     source_sync_file: str = typer.Option(..., "--source-sync-file"),
     event_index: int = typer.Option(..., "--event-index", min=1),
-    status: str = typer.Option(..., "--status"),
+    status: str = typer.Option(
+        ...,
+        "--status",
+        help="Human Review Decision Log status only; approved does not confirm promotion eligibility or persist Career Knowledge.",
+    ),
     reviewer_id: str = typer.Option(..., "--reviewer-id"),
     reason: str = typer.Option(..., "--reason"),
     decision_log_dir: str = typer.Option(str(REVIEW_DECISIONS_DIR), "--decision-log-dir"),
@@ -3870,17 +3944,28 @@ def add_review_decision_command(
     evidence_ref: list[str] | None = typer.Option(None, "--evidence-ref"),
     notes: str | None = typer.Option(None, "--notes"),
 ) -> None:
-    """Append one human decision about a Canonical Event."""
+    """Append one Human Review decision; this does not promote or persist Career Knowledge."""
     try:
         source_sync_path = resolve_input_path(source_sync_file)
+        normalized_source_sync_file = normalize_source_sync_reference(source_sync_path)
         canonical_event_ref = resolve_canonical_event_ref(
-            source_sync_path, source_sync_file=source_sync_file, event_index=event_index,
+            source_sync_path, source_sync_file=normalized_source_sync_file, event_index=event_index,
             source_id=source_id, event_date=event_date,
         )
+        normalized_status = status.strip().lower()
+        if normalized_status == "approved":
+            _, event_blocks = read_source_sync_event_blocks(source_sync_path)
+            queue_item = build_review_queue_item(
+                event_blocks[event_index - 1], path=source_sync_path, event_index=event_index,
+            )
+            if queue_item.readiness["status"] == "blocked_by_policy":
+                raise ValueError(
+                    "blocked_by_policy Canonical Events cannot be approved in the v0.4.0 Human Review Decision Log MVP"
+                )
         record = create_review_decision(
             source_sync_file=canonical_event_ref["source_sync_file"], source_id=canonical_event_ref["source_id"],
             event_index=canonical_event_ref["event_index"], event_date=canonical_event_ref["event_date"],
-            queue_id=queue_id, status=status, reviewer_id=reviewer_id,
+            queue_id=queue_id, status=normalized_status, reviewer_id=reviewer_id,
             reviewed_at=reviewed_at, reason=reason, evidence_refs=evidence_ref, notes=notes,
         )
         path = append_review_decision(record, decision_log_dir=Path(decision_log_dir))

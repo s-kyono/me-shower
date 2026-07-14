@@ -16,3 +16,5 @@ These values only describe whether Human Review can begin. The Promotion Decisio
 ## Outputs
 
 `build-review-queue` writes `app/generated/review_queue.md` and `app/generated/review_queue.jsonl` by default. Both are disposable derived outputs, excluded from normal PR scope, and must not be hand-edited or treated as durable state.
+
+For a `blocked_by_policy` item, generated and inspected output is fail-closed. It may retain the queue ID, Canonical Event reference, source type, confidence, readiness and blocking reasons, semantic risk flags, and already-safe Evidence references. It must omit summary, actions, decisions, improvements, tags, and tools so that the content that triggered the policy block is not repeated in Markdown, JSONL, or CLI output.

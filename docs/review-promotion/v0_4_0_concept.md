@@ -10,6 +10,8 @@ v0.4.0 does not implement full Career Knowledge persistence.
 v0.4.0 does not implement downstream Claim / View / Resume generation.
 ```
 
+v0.4.0 does include MVP commands for building and inspecting the Review Queue and for appending and inspecting the Review Decision Log. It also generates a disposable `review_queue` worklist. That output is neither Career Knowledge nor a source of truth. The complete end-to-end promotion and persistence CLI workflow is not implemented.
+
 Career Knowledge is the central asset. Career Knowledge Store defines the future source-of-truth boundary for reviewed, accepted career meaning. v0.4.0 prepares Career Knowledge promotion; it does not operate a completed Career Knowledge persistence system.
 
 ## Relationship to v0.3.0 and v0.5.0
@@ -74,11 +76,11 @@ Defines eligibility for becoming a promotion candidate from Canonical Event to C
 
 ### 02. Review Queue
 
-Defines the derived worklist that opens Human Review. It is a worklist, not a Review Decision and not Career Knowledge.
+Defines the derived worklist that opens Human Review. v0.4.0 includes MVP commands that build and inspect this generated worklist. It is a worklist, not a Review Decision, Career Knowledge, or a source of truth.
 
 ### 03. Review Decision Log
 
-Defines the append-only boundary for Human Review decision history. A Review Decision alone is not PromotionDecisionRecord and does not write Career Knowledge.
+Defines the append-only boundary for Human Review decision history. v0.4.0 includes MVP commands that append and inspect these decisions. A Review Decision alone is not PromotionDecisionRecord, does not confirm promotion eligibility, and does not write Career Knowledge.
 
 ### 04. Career Knowledge Store
 
@@ -136,10 +138,10 @@ Resume is a View. PDF is a render artifact. Generated Markdown is an output arti
 - Resume regeneration runtime
 - Renderer or Manifest
 - Review UI
-- CLI workflow
-- generated output
+- complete end-to-end promotion and persistence CLI workflow
+- generated Career Knowledge, Claim, View, Resume, Renderer, or Manifest output
 
-No runtime code, source synchronization behavior, or v0.5.0 schema is added by this concept update.
+The MVP Review Queue and Review Decision Log runtime does not modify source synchronization behavior, implement the v0.5.0 schemas, or complete promotion and persistence.
 
 ## Handoff to v0.5.0+
 
@@ -160,4 +162,4 @@ Until those contracts exist, an `approved` Review Decision remains only a future
 
 ## Non-Goals
 
-v0.4.0 does not add runtime code, CLI commands, Review UI, Career Knowledge data, Evidence or Reason data, Claim/View/Resume generation, Renderer/Manifest behavior, generated output, source synchronization changes, or v0.5.0 schemas. It does not promote Resume wording, Views, PDFs, generated Markdown, reasons, Evidence References, or Review Queue items into Career Knowledge.
+Beyond its MVP Review Queue and Review Decision Log commands and disposable generated review worklist, v0.4.0 does not add Review UI, Career Knowledge data, Evidence or Reason data, Claim/View/Resume generation, Renderer/Manifest behavior, source synchronization changes, v0.5.0 schemas, or a complete end-to-end promotion and persistence CLI workflow. It does not promote Resume wording, Views, PDFs, generated Markdown, reasons, Evidence References, or Review Queue items into Career Knowledge.
