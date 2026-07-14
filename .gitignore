@@ -10,6 +10,8 @@ __pycache__/
 !.codex/agents/**
 !.codex/loop-skills/
 !.codex/loop-skills/**
+!.codex/review-promotion/
+!.codex/review-promotion/**
 .codex/**/.DS_Store
 
 # Original source documents and local reference assets.

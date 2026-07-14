@@ -11,6 +11,277 @@ from typer.testing import CliRunner
 runner = CliRunner()
 
 
+def configure_review_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path, Path]:
+    repo_root = tmp_path / "repo"
+    app_root = repo_root / "app"
+    source_sync_dir = app_root / "data" / "source_sync"
+    decision_dir = app_root / "data" / "review_decisions"
+    write_source_sync_fixture(source_sync_dir)
+    monkeypatch.setattr(main, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(main, "ROOT", app_root)
+    monkeypatch.setattr(main, "SOURCE_SYNC_DIR", source_sync_dir)
+    return repo_root, source_sync_dir, decision_dir
+
+
+def review_decision(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "source_sync_file": "app/data/source_sync/2026-07-10.md",
+        "source_id": "daily_report:2026-07-10.md",
+        "event_index": 1,
+        "event_date": "2026-07-10",
+        "status": "approved",
+        "reviewer_id": "self",
+        "reviewed_at": "2026-07-12T10:00:00+09:00",
+        "reason": "Evidence is traceable and the meaning is acceptable.",
+        "evidence_refs": ["daily_report:2026-07-10.md"],
+    }
+    values.update(overrides)
+    return main.create_review_decision(**values)  # type: ignore[arg-type]
+
+
+def test_review_decision_approved_appends_with_unique_ids(tmp_path: Path) -> None:
+    first = review_decision()
+    second = review_decision(status="needs_more_evidence", evidence_refs=[])
+    assert first["decision_id"] != second["decision_id"]
+
+    path = main.append_review_decision(first, decision_log_dir=tmp_path)
+    main.append_review_decision(second, decision_log_dir=tmp_path)
+
+    assert path.name == "2026-07-12.jsonl"
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 2
+
+
+@pytest.mark.parametrize("status", ["rejected", "deferred", "needs_more_evidence"])
+def test_review_decision_requires_reason_for_every_non_approved_status(status: str) -> None:
+    with pytest.raises(ValueError, match="reason"):
+        review_decision(status=status, reason="", evidence_refs=[])
+
+
+def test_review_decision_approved_requires_evidence_and_rejects_invalid_status() -> None:
+    with pytest.raises(ValueError, match="evidence_ref"):
+        review_decision(evidence_refs=[])
+    with pytest.raises(ValueError, match="status must be one of"):
+        review_decision(status="ready_for_review")
+    with pytest.raises(ValueError, match="normalized repository-relative path"):
+        review_decision(source_sync_file="/Users/example/app/data/source_sync/2026-07-10.md")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("reason", "API_KEY=super-secret-value"),
+    ("notes", "See https://private.example.invalid/item"),
+])
+def test_review_decision_rejects_unsafe_free_text(field: str, value: str) -> None:
+    with pytest.raises(ValueError, match="must not contain"):
+        review_decision(**{field: value})
+
+
+@pytest.mark.parametrize("unsafe_ref", [
+    "/Users/alice/private/client-project.txt",
+    "/home/alice/private/client-project.txt",
+    "file:///Users/alice/private/client-project.txt",
+    r"C:\Users\alice\private\client-project.txt",
+    "~/private/client-project.txt",
+    "../private/client-project.txt",
+    "https://private.example.invalid/review",
+    "contact@example.com",
+    "API_KEY=super-secret-value",
+    "TOKEN=secret-value",
+    "SECRET=client-password",
+])
+def test_review_decision_rejects_unsafe_evidence_ref_without_appending(
+    tmp_path: Path, unsafe_ref: str,
+) -> None:
+    with pytest.raises(ValueError, match="unsafe evidence or source reference"):
+        record = review_decision(evidence_refs=[unsafe_ref])
+        main.append_review_decision(record, decision_log_dir=tmp_path)
+
+    assert not list(tmp_path.glob("*.jsonl"))
+
+
+def test_append_review_decision_rejects_unsafe_evidence_ref_without_appending(tmp_path: Path) -> None:
+    record = review_decision()
+    record["evidence_refs"] = ["/Users/alice/private/client-project.txt"]
+
+    with pytest.raises(ValueError, match="unsafe evidence or source reference"):
+        main.append_review_decision(record, decision_log_dir=tmp_path)
+
+    assert not list(tmp_path.glob("*.jsonl"))
+
+
+def test_review_decision_cli_rejects_unsafe_evidence_ref_without_appending(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _, source_sync_dir, decision_dir = configure_review_workspace(monkeypatch, tmp_path)
+
+    result = runner.invoke(main.app, [
+        "add-review-decision", "--decision-log-dir", str(decision_dir),
+        "--source-sync-file", str(source_sync_dir / "2026-07-10.md"),
+        "--event-index", "1", "--reviewer-id", "self", "--status", "approved",
+        "--reason", "Supported.", "--evidence-ref=/Users/alice/private/client-project.txt",
+    ])
+
+    assert result.exit_code != 0
+    assert not list(decision_dir.glob("*.jsonl"))
+
+
+def test_review_decision_preserves_safe_evidence_refs(tmp_path: Path) -> None:
+    safe_refs = [
+        "github:s-kyono/me-shower#3",
+        "daily_report:2026-07-10.md",
+        "source_sync:2026-07-10.md#event-1",
+        "review_queue:2026-07-10#event-1",
+    ]
+    record = review_decision(evidence_refs=safe_refs)
+
+    path = main.append_review_decision(record, decision_log_dir=tmp_path)
+
+    assert json.loads(path.read_text(encoding="utf-8"))["evidence_refs"] == safe_refs
+
+
+def test_review_decision_cli_inspects_status_source_id_and_limit_without_mutating_inputs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _, source_sync_dir, decision_dir = configure_review_workspace(monkeypatch, tmp_path)
+    source_sync = source_sync_dir / "2026-07-10.md"
+    review_queue = tmp_path / "review_queue.jsonl"
+    review_queue.write_text("queue\n", encoding="utf-8")
+    before = (source_sync.read_bytes(), review_queue.read_bytes())
+    common = ["--decision-log-dir", str(decision_dir), "--source-sync-file", str(source_sync),
+              "--event-index", "1", "--reviewer-id", "self"]
+    approved = runner.invoke(main.app, ["add-review-decision", *common,
+        "--status", "approved", "--reason", "Supported.", "--evidence-ref", "file:one"])
+    rejected = runner.invoke(main.app, ["add-review-decision", *common,
+        "--status", "rejected", "--reason", "Out of scope."])
+    assert approved.exit_code == rejected.exit_code == 0
+
+    result = runner.invoke(main.app, ["inspect-review-decisions", "--decision-log-dir", str(decision_dir),
+        "--status", "approved", "--source-id", "daily_report:2026-07-10.md", "--limit", "1"])
+    assert result.exit_code == 0
+    assert "items: 1" in result.stdout
+    assert "daily_report:2026-07-10.md" in result.stdout
+    assert before == (source_sync.read_bytes(), review_queue.read_bytes())
+
+    stored = main.read_review_decisions(decision_dir)
+    assert stored[0]["canonical_event_ref"]["source_id"] == "daily_report:2026-07-10.md"
+    assert stored[0]["canonical_event_ref"]["event_date"] == "2026-07-10"
+    assert stored[0]["canonical_event_ref"]["source_sync_file"] == "app/data/source_sync/2026-07-10.md"
+
+
+@pytest.mark.parametrize(
+    "source_file,event_index,extra_args,error_text",
+    [
+        ("missing.md", 1, [], "Missing file"),
+        ("2026-07-10.md", 99, [], "event_index 99 does not exist"),
+        ("2026-07-10.md", 1, ["--source-id", "daily_report:wrong.md"], "source_id does not match"),
+        ("2026-07-10.md", 1, ["--event-date", "2026-07-11"], "event_date does not match"),
+    ],
+)
+def test_review_decision_cli_rejects_invalid_canonical_event_without_writing_jsonl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source_file: str, event_index: int,
+    extra_args: list[str], error_text: str,
+) -> None:
+    _, source_sync_dir, decision_dir = configure_review_workspace(monkeypatch, tmp_path)
+    source_path = source_sync_dir / source_file
+    original = {path.name: path.read_bytes() for path in source_sync_dir.glob("*.md")}
+
+    result = runner.invoke(main.app, [
+        "add-review-decision", "--decision-log-dir", str(decision_dir),
+        "--source-sync-file", str(source_path), "--event-index", str(event_index),
+        "--status", "needs_more_evidence", "--reviewer-id", "self",
+        "--reason", "Need stronger Evidence.", *extra_args,
+    ])
+
+    assert result.exit_code != 0
+    assert error_text in result.output
+    assert not decision_dir.exists() or not list(decision_dir.glob("*.jsonl"))
+    assert original == {path.name: path.read_bytes() for path in source_sync_dir.glob("*.md")}
+
+
+def test_review_decision_cli_rejects_blocked_approval_but_allows_non_approved_statuses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _, source_sync_dir, decision_dir = configure_review_workspace(monkeypatch, tmp_path)
+    source_path = source_sync_dir / "2026-07-10.md"
+    source_path.write_text(
+        source_path.read_text(encoding="utf-8").replace(
+            "GraphQL Resolver分離を実施", "contact@example.com の情報を確認"
+        ),
+        encoding="utf-8",
+    )
+    common = [
+        "--decision-log-dir", str(decision_dir), "--source-sync-file", str(source_path),
+        "--event-index", "1", "--reviewer-id", "self",
+    ]
+
+    approved = runner.invoke(main.app, [
+        "add-review-decision", *common, "--status", "approved", "--reason", "Supported.",
+        "--evidence-ref", "daily_report:2026-07-10.md",
+    ])
+
+    assert approved.exit_code != 0
+    assert "blocked_by_policy Canonical Events cannot be approved" in approved.output
+    assert not decision_dir.exists() or not list(decision_dir.glob("*.jsonl"))
+
+    for status in ["rejected", "deferred", "needs_more_evidence"]:
+        result = runner.invoke(main.app, [
+            "add-review-decision", *common, "--status", status, "--reason", "Policy review required.",
+        ])
+        assert result.exit_code == 0, result.output
+
+    assert {record["status"] for record in main.read_review_decisions(decision_dir)} == {
+        "rejected", "deferred", "needs_more_evidence",
+    }
+
+
+def test_review_decision_cli_normalizes_absolute_and_relative_source_sync_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    repo_root, source_sync_dir, decision_dir = configure_review_workspace(monkeypatch, tmp_path)
+    source_path = source_sync_dir / "2026-07-10.md"
+    relative_path = source_path.relative_to(repo_root).as_posix()
+    common = ["--decision-log-dir", str(decision_dir), "--event-index", "1", "--reviewer-id", "self"]
+
+    for status, path_text in [("rejected", str(source_path)), ("deferred", relative_path)]:
+        result = runner.invoke(main.app, [
+            "add-review-decision", *common, "--source-sync-file", path_text,
+            "--status", status, "--reason", "Not promoted.",
+        ])
+        assert result.exit_code == 0, result.output
+
+    stored_paths = {
+        record["canonical_event_ref"]["source_sync_file"]
+        for record in main.read_review_decisions(decision_dir)
+    }
+    assert stored_paths == {"app/data/source_sync/2026-07-10.md"}
+    assert str(tmp_path) not in json.dumps(main.read_review_decisions(decision_dir))
+
+
+def test_review_decision_cli_rejects_source_sync_path_escape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    repo_root, source_sync_dir, decision_dir = configure_review_workspace(monkeypatch, tmp_path)
+    outside = repo_root / "outside.md"
+    outside.write_text((source_sync_dir / "2026-07-10.md").read_text(encoding="utf-8"), encoding="utf-8")
+    symlink = source_sync_dir / "outside-link.md"
+    symlink.symlink_to(outside)
+    paths = [
+        str(outside),
+        "app/data/source_sync/../../../outside.md",
+        str(symlink),
+    ]
+
+    for path_text in paths:
+        result = runner.invoke(main.app, [
+            "add-review-decision", "--decision-log-dir", str(decision_dir),
+            "--source-sync-file", path_text, "--event-index", "1", "--status", "rejected",
+            "--reviewer-id", "self", "--reason", "Outside source_sync.",
+        ])
+        assert result.exit_code != 0
+        assert "source_sync_file must be under" in result.output
+
+    assert not decision_dir.exists() or not list(decision_dir.glob("*.jsonl"))
+
+
 def build_command_runner(fixtures: dict[tuple[str, ...], main.CommandResult]):
     def runner(command: list[str]) -> main.CommandResult:
         key = tuple(command)
@@ -115,43 +386,224 @@ def write_source_sync_fixture(source_sync_dir: Path) -> None:
     (source_sync_dir / "2026-07-11.md").write_text(
         "\n".join(
             [
-                "# Canonical Events",
-                "",
-                "date: 2026-07-11",
-                "",
-                "## Event 1",
-                "",
-                "- schema: canonical_event_v0_3",
-                "- date: 2026-07-11",
-                "  source_id: slack:C0123456789:1781736600.000100",
-                "  source_type: slack",
-                "  category: implementation",
-                "  summary: Slack Connector関連の実装・調査を実施",
-                "  actions:",
-                "  - Slack Connector関連の実装・調査を実施",
-                "  decisions:",
-                "  - none",
-                "  improvements:",
-                "  - none",
-                "  tags:",
-                "  - Slack",
-                "  - Connector",
-                "  tools:",
-                "  - none",
-                "  noise_removed:",
-                "  - none",
-                "  confidence: low",
-                "  confidence_reasons:",
-                "  - source_type:slack",
-                "  - actions:1",
-                "  evidence:",
-                "  - kind: source_reference",
-                "    detail: slack:C0123456789",
-                "",
+                "# Canonical Events", "", "date: 2026-07-11", "", "## Event 1", "",
+                "- schema: canonical_event_v0_3", "- date: 2026-07-11",
+                "  source_id: slack:C0123456789:1781736600.000100", "  source_type: slack",
+                "  category: implementation", "  summary: Slack Connector関連の実装・調査を実施",
+                "  actions:", "  - Slack Connector関連の実装・調査を実施", "  decisions:", "  - none",
+                "  improvements:", "  - none", "  tags:", "  - Slack", "  - Connector", "  tools:",
+                "  - none", "  noise_removed:", "  - none", "  confidence: low",
+                "  confidence_reasons:", "  - source_type:slack", "  - actions:1", "  evidence:",
+                "  - kind: source_reference", "    detail: slack:C0123456789", "",
             ]
         ),
         encoding="utf-8",
     )
+
+
+def test_review_queue_builds_from_source_sync_with_stable_ids_and_readiness(tmp_path: Path) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+
+    first = main.read_review_queue_items(source_sync_dir)
+    second = main.read_review_queue_items(source_sync_dir)
+
+    assert [item.queue_id for item in first] == [item.queue_id for item in second]
+    assert len(first) == 3
+    assert {item.readiness["status"] for item in first} <= main.REVIEW_READINESS_STATUSES
+    assert not ({item.readiness["status"] for item in first} & main.FORBIDDEN_REVIEW_QUEUE_STATUSES)
+    assert any(item.readiness["status"] == "ready_for_review" for item in first)
+    low_item = next(item for item in first if item.confidence["level"] == "low")
+    assert low_item.readiness["status"] != "ready_for_review"
+
+
+def test_review_queue_requires_evidence_and_blocks_sensitive_content(tmp_path: Path) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    path = source_sync_dir / "2026-07-10.md"
+    content = path.read_text(encoding="utf-8")
+    content = content.replace("detail: daily_report:2026-07-10.md", "detail: none", 1)
+    content = content.replace("PRレビューで設計指摘を受領", "contact@example.com の情報を確認")
+    path.write_text(content, encoding="utf-8")
+
+    items = main.read_review_queue_items(source_sync_dir)
+    missing = next(item for item in items if item.canonical_event_ref["event_index"] == 1 and item.canonical_event_ref["source_sync_file"] == "2026-07-10.md")
+    sensitive = next(item for item in items if item.canonical_event_ref["event_index"] == 2 and item.canonical_event_ref["source_sync_file"] == "2026-07-10.md")
+
+    assert missing.readiness["status"] == "needs_evidence_before_review"
+    assert sensitive.readiness["status"] == "blocked_by_policy"
+
+
+@pytest.mark.parametrize(
+    "sensitive_text",
+    [
+        "contact@example.com の情報を確認",
+        "See https://private.example.invalid/review for details",
+        "API_KEY=super-secret-value を確認",
+    ],
+)
+def test_blocked_review_queue_outputs_only_safe_metadata(tmp_path: Path, sensitive_text: str) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    path = source_sync_dir / "2026-07-10.md"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("PRレビューで設計指摘を受領", sensitive_text),
+        encoding="utf-8",
+    )
+    output = tmp_path / "generated" / "review_queue.md"
+    jsonl_output = tmp_path / "generated" / "review_queue.jsonl"
+
+    main.build_review_queue(
+        source_sync_dir=source_sync_dir, output_path=output, jsonl_output_path=jsonl_output,
+    )
+    inspected = runner.invoke(main.app, [
+        "inspect-review-queue", "--source-sync-dir", str(source_sync_dir),
+        "--readiness", "blocked_by_policy",
+    ])
+
+    markdown = output.read_text(encoding="utf-8")
+    records = [json.loads(line) for line in jsonl_output.read_text(encoding="utf-8").splitlines()]
+    blocked = next(
+        record for record in records
+        if record["canonical_event_ref"]["source_sync_file"] == "2026-07-10.md"
+        and record["canonical_event_ref"]["event_index"] == 2
+    )
+    assert sensitive_text not in markdown
+    assert sensitive_text not in json.dumps(records, ensure_ascii=False)
+    assert inspected.exit_code == 0, inspected.output
+    assert sensitive_text not in inspected.output
+    assert "blocking_reasons: confidential_or_raw_sensitive_content_risk" in inspected.output
+    assert blocked["readiness"]["status"] == "blocked_by_policy"
+    assert blocked["readiness"]["blocking_reasons"] == ["confidential_or_raw_sensitive_content_risk"]
+    assert blocked["canonical_event_ref"]["event_index"] == 2
+    assert blocked["evidence"]["source_reference"] == "github:s-kyono/me-shower#3"
+    assert not ({"summary", "actions", "decisions", "improvements", "tags", "tools"} & blocked.keys())
+    normal = next(
+        record for record in records
+        if record["canonical_event_ref"]["source_sync_file"] == "2026-07-10.md"
+        and record["canonical_event_ref"]["event_index"] == 1
+    )
+    assert normal["summary"] == "GraphQL Resolver分離を実施"
+    assert "GraphQL Resolver分離を実施" in markdown
+
+
+@pytest.mark.parametrize("evidence_kind", ["source_reference", "file_reference"])
+@pytest.mark.parametrize("unsafe_ref", [
+    "/Users/alice/private/client-project.txt",
+    "/home/alice/private/client-project.txt",
+    "file:///Users/alice/private/client-project.txt",
+    r"C:\Users\alice\private\client-project.txt",
+    "~/private/client-project.txt",
+    "../private/client-project.txt",
+    "https://private.example.invalid/review",
+    "contact@example.com",
+    "API_KEY=super-secret-value",
+    "TOKEN=secret-value",
+    "SECRET=client-password",
+])
+def test_blocked_review_queue_omits_unsafe_evidence_references_from_all_outputs(
+    tmp_path: Path, unsafe_ref: str, evidence_kind: str,
+) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    path = source_sync_dir / "2026-07-10.md"
+    content = path.read_text(encoding="utf-8")
+    content = content.replace("PRレビューで設計指摘を受領", "contact@example.com の情報を確認")
+    content = content.replace(
+        "kind: source_reference\n    detail: github:s-kyono/me-shower#3",
+        f"kind: {evidence_kind}\n    detail: {unsafe_ref}",
+    )
+    path.write_text(content, encoding="utf-8")
+    output = tmp_path / "generated" / "review_queue.md"
+    jsonl_output = tmp_path / "generated" / "review_queue.jsonl"
+
+    main.build_review_queue(
+        source_sync_dir=source_sync_dir, output_path=output, jsonl_output_path=jsonl_output,
+    )
+    inspected = runner.invoke(main.app, [
+        "inspect-review-queue", "--source-sync-dir", str(source_sync_dir),
+        "--readiness", "blocked_by_policy",
+    ])
+    combined_output = output.read_text(encoding="utf-8") + jsonl_output.read_text(encoding="utf-8") + inspected.output
+
+    assert inspected.exit_code == 0, inspected.output
+    assert unsafe_ref not in combined_output
+
+
+def test_blocked_review_queue_preserves_safe_evidence_reference(tmp_path: Path) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    path = source_sync_dir / "2026-07-10.md"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "PRレビューで設計指摘を受領", "contact@example.com の情報を確認",
+        ),
+        encoding="utf-8",
+    )
+
+    blocked = next(
+        item for item in main.read_review_queue_items(source_sync_dir)
+        if item.readiness["status"] == "blocked_by_policy"
+    )
+
+    assert blocked.evidence["source_reference"] == "github:s-kyono/me-shower#3"
+
+
+def test_build_review_queue_writes_safe_markdown_and_jsonl_without_mutating_source_sync(tmp_path: Path) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    path = source_sync_dir / "2026-07-10.md"
+    content = path.read_text(encoding="utf-8").replace(
+        "  - kind: source_reference\n    detail: daily_report:2026-07-10.md",
+        "  - kind: redacted_excerpt\n    detail: raw source secret phrase\n"
+        "  - kind: source_reference\n    detail: daily_report:2026-07-10.md",
+        1,
+    )
+    path.write_text(content + "\n", encoding="utf-8")
+    original = {item.name: item.read_bytes() for item in source_sync_dir.glob("*.md")}
+    output = tmp_path / "generated" / "review_queue.md"
+    jsonl_output = tmp_path / "generated" / "review_queue.jsonl"
+
+    markdown_path, jsonl_path, count = main.build_review_queue(
+        source_sync_dir=source_sync_dir, output_path=output, jsonl_output_path=jsonl_output
+    )
+
+    assert count == 3
+    assert markdown_path.exists() and jsonl_path == jsonl_output and jsonl_output.exists()
+    generated = markdown_path.read_text(encoding="utf-8") + jsonl_output.read_text(encoding="utf-8")
+    assert "Canonical Events" not in generated
+    assert "raw source secret phrase" not in generated
+    assert original == {item.name: item.read_bytes() for item in source_sync_dir.glob("*.md")}
+
+
+def test_review_queue_cli_filters_by_readiness_source_type_and_limit(tmp_path: Path) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+
+    result = runner.invoke(main.app, [
+        "inspect-review-queue", "--source-sync-dir", str(source_sync_dir),
+        "--readiness", "ready_for_review", "--source-type", "github", "--limit", "1",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert "items: 1" in result.output
+    assert "[ready_for_review]" in result.output
+
+
+def test_review_queue_cli_build_supports_date_filter(tmp_path: Path) -> None:
+    source_sync_dir = tmp_path / "source_sync"
+    write_source_sync_fixture(source_sync_dir)
+    output = tmp_path / "generated" / "review_queue.md"
+    jsonl = tmp_path / "generated" / "review_queue.jsonl"
+
+    result = runner.invoke(main.app, [
+        "build-review-queue", "--source-sync-dir", str(source_sync_dir), "--output", str(output),
+        "--jsonl-output", str(jsonl), "--from", "2026-07-11", "--to", "2026-07-11",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert "items: 1" in result.output
+    assert output.exists() and jsonl.exists()
 
 
 def test_load_resume_data_has_projects() -> None:

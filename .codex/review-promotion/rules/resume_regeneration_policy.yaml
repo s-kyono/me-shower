@@ -1,0 +1,127 @@
+version: resume_regeneration_policy_v0_4
+description: Defines when and how Resume Views may be regenerated from Career Knowledge and reviewed Claim Candidates.
+
+resume_role:
+  view: true
+  source_of_truth: false
+  career_knowledge: false
+  claim_candidate: false
+  generated_projection: true
+  downstream_of_career_knowledge: true
+
+policy_role:
+  implements_generation: false
+  implements_renderer: false
+  creates_resume_output_in_this_pr: false
+  creates_pdf_output_in_this_pr: false
+  modifies_career_knowledge_store: false
+
+allowed_future_inputs:
+  career_knowledge_entry: true
+  reviewed_claim_candidate: true
+  resume_view_permission: true
+  resume_view_policy: true
+  resume_template: true
+  safe_traceability_metadata: true
+
+traceability_only_inputs:
+  safe_traceability_metadata:
+    may_generate_resume_text: false
+    may_resolve_raw_content: false
+
+forbidden_inputs:
+  raw_source_content: true
+  source_sync: true
+  canonical_event_direct: true
+  review_queue_item: true
+  review_decision_log_row_direct: true
+  approved_decision_only: true
+  promotion_decision_record_alone: true
+  daily_report: true
+  raw_slack_teams_github_text: true
+  unreviewed_claim_candidate: true
+  previous_resume_output: true
+  generated_resume: true
+  generated_pdf: true
+  generated_view_from_another_purpose: true
+  structured_view_from_another_purpose: true
+
+regeneration_allowed_when:
+  career_knowledge_changed: true
+  reviewed_claim_candidate_changed: true
+  resume_view_permission_changed: true
+  resume_policy_changed: true
+  resume_template_changed: true
+  render_format_changed: true
+
+regeneration_forbidden_when:
+  source_sync_changed_only: true
+  raw_source_changed_only: true
+  review_queue_changed_only: true
+  review_decision_log_changed_only: true
+  approved_decision_only_changed: true
+  promotion_decision_record_only_changed: true
+  unreviewed_claim_candidate_changed: true
+  previous_resume_changed_only: true
+  generated_pdf_changed_only: true
+  generated_view_changed_only: true
+
+regenerated_resume_role:
+  draft_output: true
+  requires_review_before_delivery: true
+  source_of_truth: false
+  may_update_career_knowledge: false
+  may_be_used_as_future_input: false
+
+resume_optimization_constraints:
+  may_select: true
+  may_reorder: true
+  may_summarize_without_meaning_change: true
+  may_adjust_tone_without_meaning_change: true
+  may_create_new_fact: false
+  may_create_new_causality: false
+  may_expand_contribution_scope: false
+  may_strengthen_claim_by_omission: false
+  must_preserve_accepted_meaning: true
+
+resume_safety:
+  no_raw_source_content: true
+  no_secret_values: true
+  no_private_urls: true
+  no_confidential_content: true
+  no_ai_inference_as_fact: true
+  no_resume_overstatement: true
+  unresolved_blocking_risk_rejects_regeneration: true
+  unresolved_overstatement_requires_review: true
+  unresolved_confidentiality_rejects_regeneration: true
+  unresolved_personal_information_requires_policy: true
+
+backflow_policy:
+  resume_output_may_update_career_knowledge: false
+  resume_wording_may_become_accepted_meaning: false
+  resume_review_finding_routes_upstream: true
+
+current_scope:
+  define_resume_regeneration_policy: true
+  implement_cli: false
+  generate_resume: false
+  generate_pdf: false
+  create_generated_output: false
+  modify_career_knowledge_store: false
+
+future_connections:
+  view_generation:
+    - structured_resume_view
+  renderer:
+    - render_structured_resume_as_markdown
+    - render_structured_resume_as_pdf
+  future_review:
+    - resume_review_before_delivery
+    - resume_diff_review
+    - upstream_review_request
+  future_manifest:
+    - resume_manifest
+    - source_refs
+    - claim_refs
+    - permission_refs
+    - content_hash

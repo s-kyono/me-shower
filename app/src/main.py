@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 from typing import Any, Callable, Protocol
+import uuid
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -34,6 +35,9 @@ THEMES_DIR = TEMPLATE_DIR / "themes"
 GENERATED_DIR = ROOT / "generated"
 SOURCE_TIMELINE_PATH = GENERATED_DIR / "source_timeline.md"
 SOURCE_TIMELINE_JSONL_PATH = GENERATED_DIR / "source_timeline.jsonl"
+REVIEW_QUEUE_PATH = GENERATED_DIR / "review_queue.md"
+REVIEW_QUEUE_JSONL_PATH = GENERATED_DIR / "review_queue.jsonl"
+REVIEW_DECISIONS_DIR = DATA_DIR / "review_decisions"
 CHANGELOG_PATH = ROOT / "CHANGELOG.md"
 RELEASES_DIR = GENERATED_DIR / "releases"
 CODEX_DIR = REPO_ROOT / ".codex"
@@ -118,6 +122,29 @@ class SourceTimelineItem:
     evidence_details: list[str]
     source_sync_path: str
     event_index: int
+
+
+@dataclass(frozen=True)
+class ReviewQueueItem:
+    queue_id: str
+    canonical_event_ref: dict[str, Any]
+    source_type: str
+    summary: str
+    actions: list[str]
+    decisions: list[str]
+    improvements: list[str]
+    tags: list[str]
+    tools: list[str]
+    confidence: dict[str, Any]
+    evidence: dict[str, Any]
+    readiness: dict[str, Any]
+    semantic_risks: dict[str, bool]
+    review_focus: list[str]
+    review_questions: list[str]
+
+
+REVIEW_DECISION_SCHEMA_VERSION = "review_decision_v0_4"
+REVIEW_DECISION_STATUSES = {"approved", "rejected", "deferred", "needs_more_evidence"}
 
 
 class SourceAdapterError(Exception):
@@ -2873,6 +2900,424 @@ def parse_source_sync_evidence_details(block: str) -> list[str]:
     return details
 
 
+def parse_source_sync_evidence(block: str) -> list[dict[str, str]]:
+    evidence: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    in_evidence = False
+    for line in block.splitlines():
+        if line == "  evidence:":
+            in_evidence = True
+            continue
+        if not in_evidence:
+            continue
+        if re.match(r"^  [a-z_]+:", line):
+            break
+        if line.startswith("  - kind: "):
+            if current:
+                evidence.append(current)
+            current = {"kind": line.removeprefix("  - kind: ").strip()}
+        elif current is not None and line.startswith("    detail: "):
+            current["detail"] = line.removeprefix("    detail: ").strip()
+    if current:
+        evidence.append(current)
+    return evidence
+
+
+REVIEW_READINESS_STATUSES = {
+    "ready_for_review",
+    "needs_evidence_before_review",
+    "blocked_by_policy",
+    "needs_cleanup",
+}
+FORBIDDEN_REVIEW_QUEUE_STATUSES = {"approved", "rejected", "deferred", "needs_more_evidence"}
+SAFE_EVIDENCE_KINDS = {"source_reference", "evidence_ref", "commit_reference", "pr_reference", "file_reference"}
+
+
+def _is_unsafe_reference(value: str) -> bool:
+    normalized = value.strip()
+    if _contains_sensitive_content([normalized]):
+        return True
+    return bool(
+        normalized.startswith(("/", "~/"))
+        or re.match(r"^[A-Za-z]:[\\/]", normalized)
+        or re.match(r"^file://", normalized, flags=re.IGNORECASE)
+        or re.search(
+            r"\b(?:api[_-]?key|token|secret|password|credential)\s*[:=]",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        or ".." in re.split(r"[\\/]", normalized)
+    )
+
+
+def _contains_sensitive_content(values: list[str]) -> bool:
+    for value in values:
+        _, findings = redact_sensitive_text(value)
+        if findings or "[REDACTED_" in value:
+            return True
+    return False
+
+
+def build_review_queue_item(block: str, *, path: Path, event_index: int) -> ReviewQueueItem:
+    event_date = parse_source_sync_scalar(block, "date") or path.stem
+    source_id = parse_source_sync_scalar(block, "source_id") or ""
+    source_type = parse_source_sync_scalar(block, "source_type") or (source_id.split(":", 1)[0] if source_id else "unknown")
+    summary = parse_source_sync_scalar(block, "summary") or ""
+    actions = parse_source_sync_list_field(block, "actions")
+    decisions = parse_source_sync_list_field(block, "decisions")
+    improvements = parse_source_sync_list_field(block, "improvements")
+    tags = parse_source_sync_list_field(block, "tags")
+    tools = parse_source_sync_list_field(block, "tools")
+    confidence_level = (parse_source_sync_scalar(block, "confidence") or "low").lower()
+    if confidence_level not in CONFIDENCE_ORDER:
+        confidence_level = "low"
+    confidence_reasons = parse_source_sync_list_field(block, "confidence_reasons")
+    confidence_score_raw = parse_source_sync_scalar(block, "confidence_score")
+    confidence_score = int(confidence_score_raw) if confidence_score_raw and confidence_score_raw.isdigit() else None
+    evidence = parse_source_sync_evidence(block)
+    safe_evidence = [
+        item for item in evidence
+        if item.get("kind") in SAFE_EVIDENCE_KINDS
+        and item.get("detail")
+        and item.get("detail", "").lower() != "none"
+        and not _is_unsafe_reference(item.get("detail", ""))
+    ]
+    evidence_refs = [item["detail"] for item in safe_evidence if item["kind"] != "source_reference"]
+    source_references = [item["detail"] for item in safe_evidence if item["kind"] == "source_reference"]
+    source_reference = source_references[0] if source_references else None
+
+    stable_ref = bool(path.name and event_index > 0 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_date))
+    structural_cleanup = not summary or source_type == "unknown" or not stable_ref
+    semantic_text = " ".join([summary, *actions, *decisions, *improvements]).lower()
+    ai_inference = "ai_inference" in block or "ai inference" in semantic_text
+    claim_candidate = "claim_candidate" in block or "claim candidate" in semantic_text
+    semantic_mixed = (ai_inference or claim_candidate) and "observed_fact" in block
+    confidential_risk = _contains_sensitive_content([summary, *actions, *decisions, *improvements, *tags, *tools])
+    missing_evidence = not (evidence_refs or source_reference)
+
+    reasons: list[str] = []
+    blocking_reasons: list[str] = []
+    if confidential_risk:
+        readiness_status = "blocked_by_policy"
+        blocking_reasons.append("confidential_or_raw_sensitive_content_risk")
+    elif structural_cleanup or semantic_mixed:
+        readiness_status = "needs_cleanup"
+        blocking_reasons.append("canonical_event_structure_or_semantic_separation_requires_cleanup")
+    elif missing_evidence:
+        readiness_status = "needs_evidence_before_review"
+        blocking_reasons.append("traceable_evidence_ref_or_safe_source_reference_is_missing")
+    elif confidence_level == "low":
+        readiness_status = "needs_evidence_before_review"
+        blocking_reasons.append("low_source_confidence_requires_stronger_evidence_and_reassessment")
+    else:
+        readiness_status = "ready_for_review"
+        reasons.append("stable_reference_traceable_evidence_and_acceptable_confidence_are_available")
+
+    semantic_risks = {
+        "ai_inference_present": ai_inference,
+        "claim_candidate_present": claim_candidate,
+        "confidential_risk": confidential_risk,
+        "resume_overstatement_risk": "resume" in semantic_text,
+        "low_confidence": confidence_level == "low",
+        "missing_evidence_ref": missing_evidence,
+    }
+    review_focus = [key for key, present in semantic_risks.items() if present]
+    if not review_focus:
+        review_focus = ["verify_event_meaning_against_evidence"]
+    review_questions = ["Does the safe Evidence support the event summary and structured fields?"]
+    if ai_inference or claim_candidate:
+        review_questions.append("Are observed facts separated from inference or claim wording?")
+
+    source_sync_file = path.name
+    identity = f"{source_sync_file}|{source_id}|{event_index}|{event_date}"
+    queue_id = "rq_" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    return ReviewQueueItem(
+        queue_id=queue_id,
+        canonical_event_ref={
+            "source_sync_file": source_sync_file,
+            "source_id": source_id or None,
+            "event_index": event_index,
+            "event_date": event_date,
+        },
+        source_type=source_type,
+        summary=summary,
+        actions=actions,
+        decisions=decisions,
+        improvements=improvements,
+        tags=tags,
+        tools=tools,
+        confidence={"level": confidence_level, "score": confidence_score, "reasons": confidence_reasons},
+        evidence={"evidence_refs": evidence_refs, "source_reference": source_reference, "traceability": bool(evidence_refs or source_reference)},
+        readiness={"status": readiness_status, "reasons": reasons, "blocking_reasons": blocking_reasons},
+        semantic_risks=semantic_risks,
+        review_focus=review_focus,
+        review_questions=review_questions,
+    )
+
+
+def read_review_queue_items(source_sync_dir: Path) -> list[ReviewQueueItem]:
+    items: list[ReviewQueueItem] = []
+    if not source_sync_dir.exists():
+        return items
+    for path in sorted(source_sync_dir.glob("*.md")):
+        _, blocks = read_source_sync_event_blocks(path)
+        items.extend(build_review_queue_item(block, path=path, event_index=index) for index, block in enumerate(blocks, 1))
+    return sorted(items, key=lambda item: (item.canonical_event_ref["event_date"], item.queue_id), reverse=True)
+
+
+def filter_review_queue_items(
+    items: list[ReviewQueueItem], *, from_date: str | None = None, to_date: str | None = None,
+    source_type: str | None = None, confidence: str | None = None, readiness: str | None = None,
+    limit: int | None = None,
+) -> list[ReviewQueueItem]:
+    filtered: list[ReviewQueueItem] = []
+    for item in items:
+        event_date = item.canonical_event_ref["event_date"]
+        if from_date and event_date < from_date:
+            continue
+        if to_date and event_date > to_date:
+            continue
+        if source_type and item.source_type.lower() != source_type.lower():
+            continue
+        if confidence and item.confidence["level"] != confidence.lower():
+            continue
+        if readiness and item.readiness["status"] != readiness.lower():
+            continue
+        filtered.append(item)
+        if limit is not None and len(filtered) >= limit:
+            break
+    return filtered
+
+
+def review_queue_item_dict(item: ReviewQueueItem) -> dict[str, Any]:
+    payload = {
+        "queue_id": item.queue_id, "canonical_event_ref": item.canonical_event_ref,
+        "source_type": item.source_type, "confidence": item.confidence, "evidence": item.evidence,
+        "readiness": item.readiness, "semantic_risks": item.semantic_risks,
+        "review_focus": item.review_focus, "review_questions": item.review_questions,
+    }
+    if item.readiness["status"] != "blocked_by_policy":
+        payload.update({
+            "summary": item.summary, "actions": item.actions, "decisions": item.decisions,
+            "improvements": item.improvements, "tags": item.tags, "tools": item.tools,
+        })
+    return payload
+
+
+def render_review_queue_jsonl(items: list[ReviewQueueItem]) -> str:
+    return "".join(json.dumps(review_queue_item_dict(item), ensure_ascii=False) + "\n" for item in items)
+
+
+def render_review_queue_markdown(items: list[ReviewQueueItem], *, source_sync_dir: Path) -> str:
+    lines = [
+        "# Review Queue", "",
+        "> Generated Human Review worklist. Not Career Knowledge or a Promotion Decision Log.", "",
+        f"Generated from `{display_path(source_sync_dir.resolve())}` without mutating it.", "",
+    ]
+    for item in items:
+        ref = item.canonical_event_ref
+        item_lines = [
+            f"## {item.queue_id} · {item.readiness['status']}", "",
+        ]
+        if item.readiness["status"] != "blocked_by_policy":
+            item_lines.extend([f"**{item.summary}**", ""])
+        item_lines.extend([
+            f"- canonical_event_ref: `{ref['source_sync_file']}` Event {ref['event_index']} ({ref['event_date']})",
+            f"- source_type: `{item.source_type}`", f"- confidence: `{item.confidence['level']}`",
+            f"- safe evidence: {', '.join(item.evidence['evidence_refs']) or item.evidence['source_reference'] or 'none'}",
+            f"- blocking reasons: {', '.join(item.readiness['blocking_reasons']) or 'none'}",
+            f"- review focus: {', '.join(item.review_focus)}", "",
+        ])
+        lines.extend(item_lines)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_review_queue(
+    *, source_sync_dir: Path = SOURCE_SYNC_DIR, output_path: Path = REVIEW_QUEUE_PATH,
+    jsonl_output_path: Path | None = REVIEW_QUEUE_JSONL_PATH, from_date: str | None = None,
+    to_date: str | None = None, source_type: str | None = None, confidence: str | None = None,
+    readiness: str | None = None, limit: int | None = None,
+) -> tuple[Path, Path | None, int]:
+    items = filter_review_queue_items(read_review_queue_items(source_sync_dir), from_date=from_date, to_date=to_date,
+        source_type=source_type, confidence=confidence, readiness=readiness, limit=limit)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(render_review_queue_markdown(items, source_sync_dir=source_sync_dir), encoding="utf-8")
+    written_jsonl: Path | None = None
+    if jsonl_output_path is not None:
+        jsonl_output_path.parent.mkdir(parents=True, exist_ok=True)
+        jsonl_output_path.write_text(render_review_queue_jsonl(items), encoding="utf-8")
+        written_jsonl = jsonl_output_path
+    return output_path, written_jsonl, len(items)
+
+
+def _parse_reviewed_at(value: str | None) -> datetime:
+    if value is None:
+        return datetime.now(timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("reviewed_at must be an ISO 8601 datetime") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("reviewed_at must include a timezone")
+    return parsed
+
+
+def _validate_review_decision_text(field: str, value: str) -> None:
+    _, findings = redact_sensitive_text(value)
+    if findings or "[REDACTED_" in value or re.search(r"https?://", value, flags=re.IGNORECASE):
+        raise ValueError(f"{field} must not contain raw source content, secrets, private URLs, or confidential content")
+
+
+def _validate_evidence_refs(evidence_refs: Any) -> list[str]:
+    if not isinstance(evidence_refs, list) or not all(isinstance(value, str) for value in evidence_refs):
+        raise ValueError("evidence_refs must be a list of safe reference strings")
+    normalized = [value.strip() for value in evidence_refs if value.strip()]
+    for value in normalized:
+        if _is_unsafe_reference(value):
+            raise ValueError("evidence_ref must not contain an unsafe evidence or source reference")
+    return normalized
+
+
+def resolve_canonical_event_ref(
+    source_sync_path: Path, *, source_sync_file: str, event_index: int,
+    source_id: str | None = None, event_date: str | None = None,
+) -> dict[str, Any]:
+    if not source_sync_path.is_file():
+        raise ValueError(f"source_sync_file does not exist or is not a file: {source_sync_file}")
+    _, blocks = read_source_sync_event_blocks(source_sync_path)
+    if event_index < 1 or event_index > len(blocks):
+        raise ValueError(f"event_index {event_index} does not exist in source_sync_file: {source_sync_file}")
+    block = blocks[event_index - 1]
+    canonical_source_id = parse_source_sync_scalar(block, "source_id")
+    canonical_event_date = parse_source_sync_scalar(block, "date")
+    if source_id is not None and canonical_source_id is not None and source_id != canonical_source_id:
+        raise ValueError(f"source_id does not match Canonical Event: expected {canonical_source_id}")
+    if event_date is not None and canonical_event_date is not None and event_date != canonical_event_date:
+        raise ValueError(f"event_date does not match Canonical Event: expected {canonical_event_date}")
+    return {
+        "source_sync_file": source_sync_file,
+        "source_id": canonical_source_id if canonical_source_id is not None else source_id,
+        "event_index": event_index,
+        "event_date": canonical_event_date if canonical_event_date is not None else event_date,
+    }
+
+
+def normalize_source_sync_reference(source_sync_path: Path) -> str:
+    resolved_path = source_sync_path.resolve()
+    resolved_source_sync_dir = SOURCE_SYNC_DIR.resolve()
+    resolved_repo_root = REPO_ROOT.resolve()
+    try:
+        resolved_path.relative_to(resolved_source_sync_dir)
+    except ValueError as exc:
+        raise ValueError(f"source_sync_file must be under {resolved_source_sync_dir}") from exc
+    try:
+        return resolved_path.relative_to(resolved_repo_root).as_posix()
+    except ValueError as exc:
+        raise ValueError("source_sync_file must be stored as a repository-relative path") from exc
+
+
+def _validate_stored_source_sync_reference(source_sync_file: str) -> None:
+    reference = Path(source_sync_file)
+    expected_prefix = ("app", "data", "source_sync")
+    if (
+        reference.is_absolute()
+        or ".." in reference.parts
+        or reference.parts[:3] != expected_prefix
+        or len(reference.parts) <= len(expected_prefix)
+        or reference.as_posix() != source_sync_file
+    ):
+        raise ValueError("source_sync_file must be a normalized repository-relative path under app/data/source_sync")
+
+
+def create_review_decision(
+    *, source_sync_file: str, event_index: int, status: str, reviewer_id: str, reason: str,
+    source_id: str | None = None, event_date: str | None = None, queue_id: str | None = None,
+    reviewed_at: str | None = None, evidence_refs: list[str] | None = None, notes: str | None = None,
+) -> dict[str, Any]:
+    status = status.strip().lower()
+    if status not in REVIEW_DECISION_STATUSES:
+        raise ValueError(f"status must be one of: {', '.join(sorted(REVIEW_DECISION_STATUSES))}")
+    if not source_sync_file.strip() or event_index < 1:
+        raise ValueError("canonical_event_ref requires source_sync_file and a positive event_index")
+    _validate_stored_source_sync_reference(source_sync_file)
+    if not reviewer_id.strip():
+        raise ValueError("reviewer_id must not be empty")
+    if not reason.strip():
+        raise ValueError("reason must not be empty")
+    evidence_refs = _validate_evidence_refs(evidence_refs or [])
+    if status == "approved" and not evidence_refs:
+        raise ValueError("approved decisions require at least one evidence_ref")
+    for field, value in [("reviewer_id", reviewer_id), ("reason", reason), ("notes", notes or "")]:
+        if value:
+            _validate_review_decision_text(field, value)
+    reviewed = _parse_reviewed_at(reviewed_at)
+    return {
+        "schema_version": REVIEW_DECISION_SCHEMA_VERSION,
+        "decision_id": f"rd_{uuid.uuid4()}",
+        "status": status,
+        "canonical_event_ref": {"source_sync_file": source_sync_file, "source_id": source_id,
+                                "event_index": event_index, "event_date": event_date},
+        "review_queue_ref": {"queue_id": queue_id},
+        "reviewer_id": reviewer_id,
+        "reviewed_at": reviewed.isoformat(),
+        "reason": reason,
+        "evidence_refs": evidence_refs,
+        "notes": notes,
+    }
+
+
+def append_review_decision(record: dict[str, Any], *, decision_log_dir: Path = REVIEW_DECISIONS_DIR) -> Path:
+    canonical_event_ref = record.get("canonical_event_ref")
+    if not isinstance(canonical_event_ref, dict):
+        raise ValueError("review decision requires canonical_event_ref")
+    _validate_stored_source_sync_reference(str(canonical_event_ref.get("source_sync_file") or ""))
+    record["evidence_refs"] = _validate_evidence_refs(record.get("evidence_refs"))
+    output_path = decision_log_dir / f"{_parse_reviewed_at(str(record['reviewed_at'])).date().isoformat()}.jsonl"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+    return output_path
+
+
+def read_review_decisions(decision_log_dir: Path = REVIEW_DECISIONS_DIR) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    if not decision_log_dir.exists():
+        return records
+    for path in sorted(decision_log_dir.glob("*.jsonl")):
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid decision JSONL at {path}:{line_number}") from exc
+    return sorted(records, key=lambda record: (record.get("reviewed_at", ""), record.get("decision_id", "")), reverse=True)
+
+
+def filter_review_decisions(
+    records: list[dict[str, Any]], *, status: str | None = None, source_id: str | None = None,
+    from_date: str | None = None, to_date: str | None = None, limit: int | None = None,
+) -> list[dict[str, Any]]:
+    if status and status.lower() not in REVIEW_DECISION_STATUSES:
+        raise ValueError(f"status must be one of: {', '.join(sorted(REVIEW_DECISION_STATUSES))}")
+    filtered: list[dict[str, Any]] = []
+    for record in records:
+        reviewed_date = str(record.get("reviewed_at", ""))[:10]
+        event_ref = record.get("canonical_event_ref") or {}
+        if status and record.get("status") != status.lower():
+            continue
+        if source_id and event_ref.get("source_id") != source_id:
+            continue
+        if from_date and reviewed_date < from_date:
+            continue
+        if to_date and reviewed_date > to_date:
+            continue
+        filtered.append(record)
+        if limit is not None and len(filtered) >= limit:
+            break
+    return filtered
+
+
 def parse_source_sync_event_block(block: str, *, path: Path, event_index: int) -> SourceTimelineItem | None:
     event_date = parse_source_sync_scalar(block, "date") or path.stem
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_date):
@@ -3418,6 +3863,142 @@ def inspect_source_timeline(
         typer.echo(f"{item.date} [{item.confidence}] {item.source_type} {item.category}")
         typer.echo(f"- {item.summary}")
         typer.echo(f"  source_id: {item.source_id}")
+
+
+@app.command("build-review-queue")
+def build_review_queue_command(
+    source_sync_dir: str = typer.Option(str(SOURCE_SYNC_DIR), "--source-sync-dir", help="Directory that stores source_sync markdown files"),
+    output: str = typer.Option(str(REVIEW_QUEUE_PATH), "--output", help="Markdown output path"),
+    jsonl_output: str | None = typer.Option(str(REVIEW_QUEUE_JSONL_PATH), "--jsonl-output", help="Optional JSONL output path"),
+    from_date: str | None = typer.Option(None, "--from", help="Inclusive start date in YYYY-MM-DD"),
+    to_date: str | None = typer.Option(None, "--to", help="Inclusive end date in YYYY-MM-DD"),
+    source_type: str | None = typer.Option(None, "--source-type", help="Filter by source type"),
+    confidence: str | None = typer.Option(None, "--confidence", help="Filter by exact confidence"),
+    readiness: str | None = typer.Option(None, "--readiness", help="Filter by review readiness"),
+    limit: int | None = typer.Option(None, "--limit", min=1, help="Maximum number of items to build"),
+) -> None:
+    """Build a generated Human Review worklist from Canonical Events in source_sync."""
+    if readiness and readiness not in REVIEW_READINESS_STATUSES:
+        raise typer.BadParameter(f"readiness must be one of: {', '.join(sorted(REVIEW_READINESS_STATUSES))}")
+    source_dir = resolve_optional_input_path(source_sync_dir, root_candidates=[ROOT, REPO_ROOT])
+    output_path, jsonl_path, count = build_review_queue(
+        source_sync_dir=source_dir, output_path=resolve_output_path(output),
+        jsonl_output_path=resolve_output_path(jsonl_output) if jsonl_output else None,
+        from_date=from_date, to_date=to_date, source_type=source_type, confidence=confidence,
+        readiness=readiness, limit=limit,
+    )
+    typer.echo(f"Built review queue: {display_path(output_path)}")
+    typer.echo(f"items: {count}")
+    if jsonl_path:
+        typer.echo(f"JSONL: {display_path(jsonl_path)}")
+
+
+@app.command("inspect-review-queue")
+def inspect_review_queue(
+    source_sync_dir: str = typer.Option(str(SOURCE_SYNC_DIR), "--source-sync-dir", help="Directory that stores source_sync markdown files"),
+    from_date: str | None = typer.Option(None, "--from", help="Inclusive start date in YYYY-MM-DD"),
+    to_date: str | None = typer.Option(None, "--to", help="Inclusive end date in YYYY-MM-DD"),
+    source_type: str | None = typer.Option(None, "--source-type", help="Filter by source type"),
+    confidence: str | None = typer.Option(None, "--confidence", help="Filter by exact confidence"),
+    readiness: str | None = typer.Option(None, "--readiness", help="Filter by review readiness"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of items to show"),
+) -> None:
+    """Inspect the regenerated review worklist without creating review decisions."""
+    if readiness and readiness not in REVIEW_READINESS_STATUSES:
+        raise typer.BadParameter(f"readiness must be one of: {', '.join(sorted(REVIEW_READINESS_STATUSES))}")
+    source_dir = resolve_optional_input_path(source_sync_dir, root_candidates=[ROOT, REPO_ROOT])
+    items = filter_review_queue_items(
+        read_review_queue_items(source_dir), from_date=from_date, to_date=to_date,
+        source_type=source_type, confidence=confidence, readiness=readiness, limit=limit,
+    )
+    typer.echo("Review Queue (generated worklist; no promotion decisions)")
+    typer.echo(f"items: {len(items)}")
+    for item in items:
+        ref = item.canonical_event_ref
+        typer.echo("")
+        typer.echo(f"{item.queue_id} [{item.readiness['status']}] {ref['event_date']} {item.source_type}")
+        if item.readiness["status"] != "blocked_by_policy":
+            typer.echo(f"- {item.summary}")
+        else:
+            typer.echo(f"  safe_evidence: {', '.join(item.evidence['evidence_refs']) or item.evidence['source_reference'] or 'none'}")
+            typer.echo(f"  blocking_reasons: {', '.join(item.readiness['blocking_reasons'])}")
+        typer.echo(f"  canonical_event_ref: {ref['source_sync_file']} Event {ref['event_index']}")
+
+
+@app.command("add-review-decision")
+def add_review_decision_command(
+    source_sync_file: str = typer.Option(..., "--source-sync-file"),
+    event_index: int = typer.Option(..., "--event-index", min=1),
+    status: str = typer.Option(
+        ...,
+        "--status",
+        help="Human Review Decision Log status only; approved does not confirm promotion eligibility or persist Career Knowledge.",
+    ),
+    reviewer_id: str = typer.Option(..., "--reviewer-id"),
+    reason: str = typer.Option(..., "--reason"),
+    decision_log_dir: str = typer.Option(str(REVIEW_DECISIONS_DIR), "--decision-log-dir"),
+    source_id: str | None = typer.Option(None, "--source-id"),
+    event_date: str | None = typer.Option(None, "--event-date"),
+    queue_id: str | None = typer.Option(None, "--queue-id"),
+    reviewed_at: str | None = typer.Option(None, "--reviewed-at"),
+    evidence_ref: list[str] | None = typer.Option(None, "--evidence-ref"),
+    notes: str | None = typer.Option(None, "--notes"),
+) -> None:
+    """Append one Human Review decision; this does not promote or persist Career Knowledge."""
+    try:
+        source_sync_path = resolve_input_path(source_sync_file)
+        normalized_source_sync_file = normalize_source_sync_reference(source_sync_path)
+        canonical_event_ref = resolve_canonical_event_ref(
+            source_sync_path, source_sync_file=normalized_source_sync_file, event_index=event_index,
+            source_id=source_id, event_date=event_date,
+        )
+        normalized_status = status.strip().lower()
+        if normalized_status == "approved":
+            _, event_blocks = read_source_sync_event_blocks(source_sync_path)
+            queue_item = build_review_queue_item(
+                event_blocks[event_index - 1], path=source_sync_path, event_index=event_index,
+            )
+            if queue_item.readiness["status"] == "blocked_by_policy":
+                raise ValueError(
+                    "blocked_by_policy Canonical Events cannot be approved in the v0.4.0 Human Review Decision Log MVP"
+                )
+        record = create_review_decision(
+            source_sync_file=canonical_event_ref["source_sync_file"], source_id=canonical_event_ref["source_id"],
+            event_index=canonical_event_ref["event_index"], event_date=canonical_event_ref["event_date"],
+            queue_id=queue_id, status=normalized_status, reviewer_id=reviewer_id,
+            reviewed_at=reviewed_at, reason=reason, evidence_refs=evidence_ref, notes=notes,
+        )
+        path = append_review_decision(record, decision_log_dir=Path(decision_log_dir))
+    except (ValueError, typer.BadParameter) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"Added review decision {record['decision_id']} to {display_path(path)}")
+
+
+@app.command("inspect-review-decisions")
+def inspect_review_decisions_command(
+    decision_log_dir: str = typer.Option(str(REVIEW_DECISIONS_DIR), "--decision-log-dir"),
+    status: str | None = typer.Option(None, "--status"),
+    source_id: str | None = typer.Option(None, "--source-id"),
+    from_date: str | None = typer.Option(None, "--from"),
+    to_date: str | None = typer.Option(None, "--to"),
+    limit: int = typer.Option(20, "--limit", min=1),
+) -> None:
+    """Inspect append-only Human Review decision history."""
+    try:
+        records = filter_review_decisions(
+            read_review_decisions(Path(decision_log_dir)), status=status, source_id=source_id,
+            from_date=from_date, to_date=to_date, limit=limit,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo("Review Decision Log (Human Review history; not Career Knowledge)")
+    typer.echo(f"items: {len(records)}")
+    for record in records:
+        ref = record["canonical_event_ref"]
+        typer.echo(
+            f"- {record['decision_id']} | {record['reviewed_at']} | {record['status']} | "
+            f"{ref.get('source_id') or ref['source_sync_file']}#event-{ref['event_index']} | {record['reason']}"
+        )
 
 
 @app.command("generate-md")

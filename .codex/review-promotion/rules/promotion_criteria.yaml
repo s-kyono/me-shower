@@ -1,0 +1,76 @@
+version: promotion_criteria_v0_4
+description: >
+  Defines the minimum checks required before a Canonical Event can be promoted
+  from source_sync into reviewed Career Knowledge. This is a persistence gate,
+  not an evaluation of achievement value.
+
+promotion_decision:
+  statuses:
+    approved:
+      description: All required checks passed; the accepted meaning may become Career Knowledge.
+      promotes_to_career_knowledge: true
+    rejected:
+      description: The candidate must not become Career Knowledge.
+      promotes_to_career_knowledge: false
+    deferred:
+      description: The decision is postponed and may be revisited later.
+      promotes_to_career_knowledge: false
+    needs_more_evidence:
+      description: Additional evidence is required before approval can be considered.
+      promotes_to_career_knowledge: false
+
+  required_checks:
+    evidence_present:
+      description: Supporting evidence exists.
+      fatal_if_missing: true
+    confidence_acceptable:
+      description: Source Confidence is high or medium; confidence never replaces Human Review.
+      accepted_levels:
+        - high
+        - medium
+      fatal_if_missing: true
+    human_reviewed:
+      description: A human reviewed and accepted the event meaning.
+      fatal_if_missing: true
+    no_confidential_leakage:
+      description: No secrets, private URLs, confidential information, or sensitive internal names remain.
+      fatal_if_missing: true
+    fact_inference_separated:
+      description: Observed facts are not mixed with human interpretation, AI inference, or claim candidates.
+      fatal_if_missing: true
+    meaning_accepted:
+      description: A human accepted the meaning of the summary, actions, decisions, and improvements.
+      fatal_if_missing: true
+    no_resume_overstatement:
+      description: The event was not exaggerated or promoted for Resume presentation.
+      fatal_if_missing: true
+    career_relevance_confirmed:
+      description: The event supports long-term understanding of work, judgment, learning, improvement, or repeatable strengths.
+      fatal_if_missing: true
+
+  optional_checks:
+    source_traceable:
+      description: The candidate can be traced to its supporting source references.
+    decision_recorded:
+      description: The reviewer and reason for the decision can be recorded.
+    claim_candidate_safe:
+      description: Any future claim candidate is supported, scoped, and safe to expose.
+    view_generation_ready:
+      description: The approved knowledge is structured enough for downstream Views.
+
+  semantic_kinds:
+    observed_fact:
+      description: Meaning directly supported by Evidence.
+    human_interpretation:
+      description: Meaning explicitly accepted by a human reviewer.
+    ai_inference:
+      description: AI-proposed meaning that must not be persisted as fact.
+    claim_candidate:
+      description: Potential View wording that remains downstream of Career Knowledge review.
+
+  invariants:
+    - Only approved decisions may promote a Canonical Event to Career Knowledge.
+    - Human Review is required even when Source Confidence is high.
+    - Low Source Confidence cannot be approved without stronger evidence and reassessment.
+    - AI inference and claim candidates must not be persisted as observed facts.
+    - Resume readiness or presentation value must not override a failed required check.
