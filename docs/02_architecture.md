@@ -15,6 +15,10 @@ Source Adapter
     ↓
 RawSource
     ↓
+Real Data Ingestion Safety Gate (in memory, fail closed)
+    ├── blocked → no Canonical Event and no persistence
+    └── pass / pass_with_sanitization → Safe Normalized Source Candidate
+            ↓
 Evidence Guard
     ↓
 Noisy Input Normalization
@@ -131,6 +135,16 @@ Receives source-specific inputs such as GitHub, Slack, Teams, Daily Reports, or 
 ### RawSource
 
 Transient adapter output. It is a transport format for ingestion, not durable knowledge.
+
+### Real Data Ingestion Safety Gate
+
+This mandatory pre-persistence boundary inspects RawSource fields in memory and returns only `pass`, `pass_with_sanitization`, or `blocked`. Credentials, raw-persistence requests, and unknown high-risk candidates block. Supported categories receive deterministic placeholders before downstream normalization. Findings contain category-level safe metadata only, never matched values.
+
+The gate creates no Canonical Event, Career Knowledge, Evidence, Human Review decision, or Promotion decision. Placeholders are neither facts nor Evidence. Rule-loading, contract drift, unsupported detector findings, detector execution, reinspection, or final pre-write assertion failures fail closed. Successful `source_sync` writes go through `persist_text_safely`, which snapshots and reinspects the current value immediately before a private atomic replacement. A wrapper is an API aid, not the security boundary.
+
+The trust boundary assumes the distributed application code and selected Git revision have not been maliciously modified. It protects untrusted Source input through supported public APIs; deliberate private-function calls, monkeypatching, source or Git-history tampering, and host/process compromise are outside this POC. An architecture test restricts the private atomic writer's production call site to `persist_text_safely`.
+
+Private URL references without an existing safe local target leave no `source_reference`, placeholder Evidence, or redacted Source ID in Canonical Events. The audit report retains only category-level counts. Existing safe local references remain available for traceability.
 
 ### Source Normalizer
 

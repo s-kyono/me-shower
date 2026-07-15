@@ -849,9 +849,9 @@ def test_add_log_redacts_before_saving_and_writes_guard_report(monkeypatch, tmp_
     assert "株式会社〇〇" not in report_text
     assert "syogo@example.com" not in report_text
     assert "https://example.com" not in report_text
-    assert "REDACTED_ORG_NAME" in report_text
-    assert "REDACTED_EMAIL" in report_text
-    assert "Stored Message" in report_text
+    assert "ORG_NAME" in report_text
+    assert "EMAIL" in report_text
+    assert "Content Policy" in report_text
 
 
 def test_add_log_redacts_realistic_sensitive_inputs_before_saving(monkeypatch, tmp_path: Path) -> None:
@@ -885,34 +885,11 @@ def test_add_log_redacts_realistic_sensitive_inputs_before_saving(monkeypatch, t
         ]
     )
 
-    main.add_log(message=message)
+    with pytest.raises(main.IngestionSafetyBlockedError):
+        main.add_log(message=message)
 
-    event_text = next(events_dir.glob("*.yaml")).read_text(encoding="utf-8")
-    report_text = next(reviews_dir.glob("*.md")).read_text(encoding="utf-8")
-
-    for raw in [
-        "山田太郎",
-        "090-1234-5678",
-        "東京都渋谷区恵比寿1-1-1",
-        "API_KEY=sk_test_1234567890abcdef",
-        "AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxx",
-        "次世代決済基盤",
-        "PROJECT-1234",
-        "feature/secret-branch",
-        "prod-db-main",
-    ]:
-        assert raw not in event_text
-        assert raw not in report_text
-
-    assert "[REDACTED_PERSON_NAME]" in event_text
-    assert "[REDACTED_PHONE_NUMBER]" in event_text
-    assert "[REDACTED_ADDRESS]" in event_text
-    assert "[REDACTED_API_KEY_VALUE]" in event_text
-    assert "[REDACTED_AWS_SECRET_ACCESS_KEY]" in event_text
-    assert "[REDACTED_PROJECT_NAME_VALUE]" in event_text
-    assert "[REDACTED_TICKET_ID]" in event_text
-    assert "[REDACTED_BRANCH_NAME]" in event_text
-    assert "[REDACTED_ENV_OR_DB_NAME]" in event_text
+    assert not list(events_dir.glob("*.yaml"))
+    assert not list(reviews_dir.glob("*.md"))
 
 
 def test_normalize_source_extracts_canonical_event_and_removes_noise(monkeypatch, tmp_path: Path) -> None:
@@ -972,9 +949,9 @@ def test_normalize_source_extracts_canonical_event_and_removes_noise(monkeypatch
     assert "[REDACTED_GITHUB_URL]" not in content
     assert "source_reference" in content
     assert "2026-07-09_sample.txt" in content
-    assert "[REDACTED_ORG_NAME]" in report_text
-    assert "[REDACTED_PHONE_NUMBER]" in report_text
-    assert "[REDACTED_GITHUB_URL]" in report_text
+    assert "ORG_NAME" in report_text
+    assert "PHONE" in report_text
+    assert "PRIVATE_URL" in report_text
 
 
 def test_normalize_sources_processes_multiple_files(monkeypatch, tmp_path: Path) -> None:
@@ -1192,9 +1169,10 @@ def test_inspect_source_adapter_lists_discovered_sources(monkeypatch, tmp_path: 
     assert result.exit_code == 0
     assert "adapter: file" in result.stdout
     assert "discovered_sources: 1" in result.stdout
-    assert "id: 2026-07-09_sample.txt" in result.stdout
-    assert f"origin: {sample.resolve()}" in result.stdout
-    assert "title: 2026-07-09_sample.txt" in result.stdout
+    assert "source_index: 1" in result.stdout
+    assert "outcome: pass" in result.stdout
+    assert "2026-07-09_sample.txt" not in result.stdout
+    assert str(sample.resolve()) not in result.stdout
 
 
 def test_inspect_daily_report_cli(monkeypatch, tmp_path: Path) -> None:
@@ -1213,9 +1191,9 @@ def test_inspect_daily_report_cli(monkeypatch, tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "adapter: daily_report" in result.stdout
-    assert "id: daily_report:2026-07-11.md" in result.stdout
-    assert "title: Daily Report 2026-07-11" in result.stdout
-    assert "detected_date: 2026-07-11" in result.stdout
+    assert "source_index: 1" in result.stdout
+    assert "outcome: pass" in result.stdout
+    assert "daily_report:2026-07-11.md" not in result.stdout
     assert "GraphQL Resolver" not in result.stdout
 
 
@@ -1236,7 +1214,8 @@ def test_inspect_daily_reports_cli(monkeypatch, tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "adapter: daily_report" in result.stdout
     assert "discovered_sources: 2" in result.stdout
-    assert "daily_report:2026-07-11.md" in result.stdout
+    assert result.stdout.count("source_index:") == 2
+    assert "daily_report:2026-07-11.md" not in result.stdout
     assert "GraphQL Resolver" not in result.stdout
 
 

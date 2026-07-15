@@ -4,6 +4,25 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [v0.5.0] - Unreleased
+
+### Added
+
+- Real Data Ingestion Safety Gate
+  - Adds a fail-closed pre-persistence gate for real work sources.
+  - Blocks credentials, raw source persistence requests, and unknown high-risk content before Canonical Event extraction.
+  - Sanitizes supported sensitive categories with deterministic placeholders before persistence.
+  - Produces category-level audit metadata without storing matched raw values.
+  - Uses a final safety assertion and atomic write for `source_sync` persistence.
+  - Adds a safe inspection CLI that never prints source or matched content.
+  - Uses typed `SanitizedContent` and `PersistableText` handoffs while reinspecting both wrappers and plain text at the public persistence boundary.
+  - Validates YAML categories, actions, and placeholders against runtime detectors and fails closed on unsupported findings.
+  - Removes raw Source identity, title, and origin from every Source inspection CLI.
+  - Reinspects the current candidate value inside the public persistence API, preventing mutated or token-forged wrappers from bypassing the gate.
+  - Converts Source Adapter inspection and normalization failures to fixed safe CLI error codes without rendering original exception messages.
+  - Discards original Adapter exception contexts and documents the trusted-code boundary for the public repository.
+  - Omits private URL placeholders and non-resolvable private Source IDs from Canonical Event Evidence while retaining safe local traceability.
+
 ## [v0.4.0] - 2026-07-13
 
 ### Added

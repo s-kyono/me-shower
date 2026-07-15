@@ -13,6 +13,10 @@ Source Adapter
     ↓
 RawSource
     ↓
+Real Data Ingestion Safety Gate（in-memory / fail closed）
+    ├── blocked → Canonical Eventを作らず保存しない
+    └── pass / pass_with_sanitization → Safe Normalized Source Candidate
+            ↓
 Evidence Guard
     ↓
 Noisy Input Normalization

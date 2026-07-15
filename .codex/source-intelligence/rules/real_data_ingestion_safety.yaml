@@ -1,0 +1,46 @@
+version: real_data_ingestion_safety_v0_5
+description: Pre-persistence safety gate for real work source ingestion.
+
+gate_role:
+  runs_before_persistence: true
+  stores_raw_source: false
+  creates_canonical_events: false
+  creates_career_knowledge: false
+  creates_review_decisions: false
+  fail_closed: true
+
+outcomes:
+  - pass
+  - pass_with_sanitization
+  - blocked
+
+protected_categories:
+  credential: {default_action: block}
+  source_raw_content: {default_action: block}
+  unknown_sensitive_candidate: {default_action: block}
+  email: {default_action: sanitize, placeholder: "[REDACTED_EMAIL]"}
+  phone: {default_action: sanitize, placeholder: "[REDACTED_PHONE]"}
+  ip_address: {default_action: sanitize, placeholder: "[REDACTED_IP_ADDRESS]"}
+  private_url: {default_action: sanitize_or_block, placeholder: "[REDACTED_PRIVATE_URL]"}
+  local_absolute_path: {default_action: sanitize, placeholder: "[REDACTED_LOCAL_PATH]"}
+  personal_identifier: {default_action: sanitize_or_manual_cleanup, placeholder: "[REDACTED_PERSONAL_IDENTIFIER]"}
+  organization_internal_identifier: {default_action: sanitize_or_manual_cleanup, placeholder: "[REDACTED_INTERNAL_IDENTIFIER]"}
+
+report_policy:
+  include_raw_value: false
+  include_matched_substring: false
+  include_private_url: false
+  include_local_absolute_path: false
+  allowed_fields: [category, action, field_path, rule_id, confidence, count]
+
+logging_policy:
+  raw_input: forbidden
+  matched_value: forbidden
+  secret_value: forbidden
+  safe_category_summary: allowed
+
+persistence_policy:
+  persist_only_after_gate: true
+  blocked_creates_no_output: true
+  sanitize_before_write: true
+  recheck_sanitized_output: true

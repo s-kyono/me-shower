@@ -28,6 +28,22 @@ GitHub often shows what changed. Slack and Teams often show what was discussed. 
 
 ## Operating Flow
 
+Before the numbered flow, every real work Source is inspected in memory. Only `pass` or `pass_with_sanitization` candidates may enter Source Intelligence; `blocked` input creates no Canonical Event and no output.
+
+### Real Data Ingestion Safety
+
+- Inspect real data before any persistent or temporary write.
+- Persist neither blocked input nor Canonical Events derived from it.
+- Replace only policy-supported categories with deterministic placeholders.
+- Never include raw values or matched substrings in audit metadata, logs, exceptions, or CLI output.
+- Treat rule-load, detector, sanitized-output recheck, and final assertion failures as fail closed.
+- Treat placeholders as safety markers only, never Career Knowledge facts or Evidence.
+- Use `persist_text_safely` for every Source-related write. It must reinspect the current value immediately before its private atomic write; wrappers are API aids and must not be trusted as the security boundary.
+- Inspect commands expose ordinal and category counts only, never raw Source identity, title, origin, or content.
+- Inspection and normalization failures expose a fixed safe error code, never the original Adapter exception message or source identifier.
+- Treat the checked-out code and Git revision as part of the trusted computing base: review the revision before use. Deliberate source modification, private-internal calls, monkeypatching, Git-history rewriting, and host/process compromise are outside this POC's guarantee.
+- When a private URL has no existing safe local target, retain only its category-level audit count. Do not persist the URL, its placeholder, a non-resolvable Source ID, or a `source_reference` Evidence entry.
+
 ```text
 1. Work happens
 2. Sources are collected
