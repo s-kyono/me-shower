@@ -1,3 +1,6 @@
+# me-shower Codex exec policy
+# 通常の実装・テスト・Git・PR作成は自動化し、履歴破壊とマージは許可しない。
+
 # ============================================================
 # Tests
 # ============================================================
@@ -127,6 +130,76 @@ prefix_rule(
         "git add -- **",
         "git add -- :(top)",
         "git add -- :(glob)**",
+    ],
+)
+
+# ============================================================
+# Git inspection
+# ============================================================
+
+# ローカルGitの状態確認は読み取り専用として自動許可する。
+prefix_rule(
+    pattern = ["git", "status"],
+    decision = "allow",
+    justification = "ワークツリー、ステージング状態、現在ブランチの確認を許可する",
+    match = [
+        "git status",
+        "git status --short",
+        "git status -sb",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "diff", "--cached", "--check"],
+    decision = "allow",
+    justification = "ステージ済み差分の空白エラー確認を許可する",
+    match = [
+        "git diff --cached --check",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "diff", "--cached", "--stat"],
+    decision = "allow",
+    justification = "ステージ済み差分の統計確認を許可する",
+    match = [
+        "git diff --cached --stat",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "diff", "--cached", "--name-only"],
+    decision = "allow",
+    justification = "ステージ済みファイル一覧の確認を許可する",
+    match = [
+        "git diff --cached --name-only",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "diff", "--cached"],
+    decision = "allow",
+    justification = "ステージ済み差分内容の確認を許可する",
+    match = [
+        "git diff --cached",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "branch", "--show-current"],
+    decision = "allow",
+    justification = "現在の作業ブランチ名の確認を許可する",
+    match = [
+        "git branch --show-current",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+    decision = "allow",
+    justification = "現在の作業ブランチ名の確認を許可する",
+    match = [
+        "git rev-parse --abbrev-ref HEAD",
     ],
 )
 
@@ -282,6 +355,51 @@ prefix_rule(
     match = [
         "git push -u origin HEAD --force",
         "git push --set-upstream origin HEAD --force-with-lease",
+    ],
+)
+
+# ============================================================
+# GitHub authentication and inspection
+# ============================================================
+
+# 認証状態の確認は読み取り専用。認証の再設定自体はユーザーが行う。
+prefix_rule(
+    pattern = ["gh", "auth", "status"],
+    decision = "allow",
+    justification = "GitHub CLIの認証状態確認を許可する",
+    match = [
+        "gh auth status",
+        "gh auth status -h github.com",
+        "gh auth status --hostname github.com",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "repo", "view"],
+    decision = "allow",
+    justification = "対象GitHubリポジトリ情報の確認を許可する",
+    match = [
+        "gh repo view",
+        "gh repo view --json nameWithOwner,url",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "view"],
+    decision = "allow",
+    justification = "作成済みPull Requestの内容とURL確認を許可する",
+    match = [
+        "gh pr view",
+        "gh pr view --json number,title,url,state",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "status"],
+    decision = "allow",
+    justification = "現在ブランチに関連するPull Request状態の確認を許可する",
+    match = [
+        "gh pr status",
     ],
 )
 
