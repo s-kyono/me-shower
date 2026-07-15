@@ -1,0 +1,513 @@
+# me-shower Codex exec policy
+# 通常の実装・テスト・Git・PR作成は自動化し、履歴破壊とマージは許可しない。
+
+# ============================================================
+# Tests
+# ============================================================
+
+# 標準の uv + pytest
+prefix_rule(
+    pattern = ["uv", "run", "python", "-m", "pytest"],
+    decision = "allow",
+    justification = "プロジェクトのpytest実行を承認なしで許可する",
+    match = [
+        "uv run python -m pytest",
+        "uv run python -m pytest tests/test_ingestion_safety.py -q",
+        "uv run python -m pytest tests/unit -q",
+    ],
+)
+
+# uv run pytest 形式
+prefix_rule(
+    pattern = ["uv", "run", "pytest"],
+    decision = "allow",
+    justification = "プロジェクトのpytest実行を承認なしで許可する",
+    match = [
+        "uv run pytest",
+        "uv run pytest tests -q",
+    ],
+)
+
+# キャッシュディレクトリを明示したpytest
+prefix_rule(
+    pattern = [
+        "env",
+        "UV_CACHE_DIR=/private/tmp/uv-cache",
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+    ],
+    decision = "allow",
+    justification = "一時キャッシュを利用したpytest実行を承認なしで許可する",
+    match = [
+        "env UV_CACHE_DIR=/private/tmp/uv-cache uv run python -m pytest",
+        "env UV_CACHE_DIR=/private/tmp/uv-cache uv run python -m pytest tests/test_ingestion_safety.py -q",
+    ],
+)
+
+# ============================================================
+# Git branch
+# ============================================================
+
+# 起点ブランチはAGENTS.mdとユーザー指示で確定させる。
+# ルール側では作業ブランチ作成コマンドだけを許可する。
+prefix_rule(
+    pattern = ["git", "switch", ["-c", "--create"]],
+    decision = "allow",
+    justification = "明示された起点ブランチからの作業ブランチ作成を許可する",
+    match = [
+        "git switch -c feat/safety-gate main",
+        "git switch --create fix/ingestion-safety develop",
+    ],
+    not_match = [
+        "git switch main",
+        "git switch --detach HEAD",
+    ],
+)
+
+# 互換用。原則は git switch -c を使用する。
+prefix_rule(
+    pattern = ["git", "checkout", "-b"],
+    decision = "allow",
+    justification = "明示された起点ブランチからの作業ブランチ作成を許可する",
+    match = [
+        "git checkout -b feat/safety-gate main",
+    ],
+    not_match = [
+        "git checkout main",
+        "git checkout -- src/app.py",
+    ],
+)
+
+# ============================================================
+# Git staging
+# ============================================================
+
+# パスを -- の後に明示する形式だけを自動許可する。
+# 例: git add -- src tests/test_example.py
+prefix_rule(
+    pattern = ["git", "add", "--"],
+    decision = "allow",
+    justification = "タスクスコープ内の明示されたパスだけをステージングする",
+    match = [
+        "git add -- src tests/test_ingestion_safety.py",
+        "git add -- AGENTS.md .codex/rules/workflow.rules",
+    ],
+    not_match = [
+        "git add .",
+        "git add -A",
+        "git add --all",
+        "git add -u",
+    ],
+)
+
+# リポジトリ全体または広範囲を暗黙にステージングする形式は禁止する。
+prefix_rule(
+    pattern = ["git", "add", [".", "-A", "--all", "-u", "--update", ":/"]],
+    decision = "forbidden",
+    justification = "対象ファイルを明示し、`git add -- <paths>` を使用する",
+    match = [
+        "git add .",
+        "git add -A",
+        "git add --all",
+        "git add -u",
+        "git add --update",
+        "git add :/",
+    ],
+)
+
+# `--` を付けても、全体を指すpathspecは禁止する。
+prefix_rule(
+    pattern = ["git", "add", "--", [".", ":/", "*", "**", ":(top)", ":(glob)**"]],
+    decision = "forbidden",
+    justification = "リポジトリ全体ではなく、タスクスコープ内のパスを個別に指定する",
+    match = [
+        "git add -- .",
+        "git add -- :/",
+        "git add -- *",
+        "git add -- **",
+        "git add -- :(top)",
+        "git add -- :(glob)**",
+    ],
+)
+
+# ============================================================
+# Git inspection
+# ============================================================
+
+# ローカルGitの状態確認は読み取り専用として自動許可する。
+prefix_rule(
+    pattern = ["git", "status"],
+    decision = "allow",
+    justification = "ワークツリー、ステージング状態、現在ブランチの確認を許可する",
+    match = [
+        "git status",
+        "git status --short",
+        "git status -sb",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "diff", "--cached", "--check"],
+    decision = "allow",
+    justification = "ステージ済み差分の空白エラー確認を許可する",
+    match = [
+        "git diff --cached --check",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "diff", "--cached", "--stat"],
+    decision = "allow",
+    justification = "ステージ済み差分の統計確認を許可する",
+    match = [
+        "git diff --cached --stat",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "diff", "--cached", "--name-only"],
+    decision = "allow",
+    justification = "ステージ済みファイル一覧の確認を許可する",
+    match = [
+        "git diff --cached --name-only",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "diff", "--cached"],
+    decision = "allow",
+    justification = "ステージ済み差分内容の確認を許可する",
+    match = [
+        "git diff --cached",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "branch", "--show-current"],
+    decision = "allow",
+    justification = "現在の作業ブランチ名の確認を許可する",
+    match = [
+        "git branch --show-current",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+    decision = "allow",
+    justification = "現在の作業ブランチ名の確認を許可する",
+    match = [
+        "git rev-parse --abbrev-ref HEAD",
+    ],
+)
+
+# ============================================================
+# Git commit
+# ============================================================
+
+# コミットメッセージの明示を必須にする。
+prefix_rule(
+    pattern = ["git", "commit", ["-m", "--message"]],
+    decision = "allow",
+    justification = "具体的なコミットメッセージ付きcommitを許可する",
+    match = [
+        "git commit -m Add ingestion safety gate",
+        "git commit --message Fix safety gate validation",
+    ],
+    not_match = [
+        "git commit",
+        "git commit --amend",
+        "git commit -a -m Update files",
+    ],
+)
+
+# 履歴改変、スコープ外を巻き込みやすい形式、hook回避は禁止する。
+prefix_rule(
+    pattern = [
+        "git",
+        "commit",
+        ["--amend", "--fixup", "--squash", "--no-verify", "-a", "--all", "-am"],
+    ],
+    decision = "forbidden",
+    justification = "新しい通常commitを作成し、`git commit -m <message>` を使用する",
+    match = [
+        "git commit --amend",
+        "git commit --fixup HEAD",
+        "git commit --squash HEAD",
+        "git commit --no-verify -m Skip hooks",
+        "git commit -a -m Update all tracked files",
+        "git commit --all -m Update all tracked files",
+        "git commit -am Update all tracked files",
+    ],
+)
+
+# ============================================================
+# Git push
+# ============================================================
+
+# 通常フローは現在の作業ブランチをHEADとしてoriginへpushする。
+prefix_rule(
+    pattern = ["git", "push", "-u", "origin", "HEAD"],
+    decision = "allow",
+    justification = "現在の作業ブランチの初回pushを許可する",
+    match = [
+        "git push -u origin HEAD",
+    ],
+    not_match = [
+        "git push -u origin main",
+        "git push origin HEAD",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "push", "--set-upstream", "origin", "HEAD"],
+    decision = "allow",
+    justification = "現在の作業ブランチの初回pushを許可する",
+    match = [
+        "git push --set-upstream origin HEAD",
+    ],
+    not_match = [
+        "git push --set-upstream origin main",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "push", "origin", "HEAD"],
+    decision = "allow",
+    justification = "現在の作業ブランチの通常pushを許可する",
+    match = [
+        "git push origin HEAD",
+    ],
+    not_match = [
+        "git push origin main",
+        "git push origin develop",
+        "git push --force origin HEAD",
+    ],
+)
+
+# force push、リモート削除、全ブランチ・全タグのpushは禁止する。
+prefix_rule(
+    pattern = [
+        "git",
+        "push",
+        ["--force", "-f", "--force-with-lease", "--delete", "-d", "--mirror", "--all", "--tags"],
+    ],
+    decision = "forbidden",
+    justification = "通常の `git push origin HEAD` を使用する",
+    match = [
+        "git push --force origin HEAD",
+        "git push -f origin HEAD",
+        "git push --force-with-lease origin HEAD",
+        "git push --delete origin feat/example",
+        "git push --mirror origin",
+        "git push --all origin",
+        "git push --tags origin",
+    ],
+)
+
+prefix_rule(
+    pattern = [
+        "git",
+        "push",
+        "origin",
+        ["--force", "-f", "--force-with-lease", "--delete", "-d", "--mirror", "--all", "--tags"],
+    ],
+    decision = "forbidden",
+    justification = "通常の `git push origin HEAD` を使用する",
+    match = [
+        "git push origin --force HEAD",
+        "git push origin -f HEAD",
+        "git push origin --force-with-lease HEAD",
+        "git push origin --delete feat/example",
+    ],
+)
+
+# allowルールのprefix後ろへ危険なオプションを追加する形式も禁止する。
+prefix_rule(
+    pattern = [
+        "git",
+        "push",
+        "origin",
+        "HEAD",
+        ["--force", "-f", "--force-with-lease", "--delete", "-d", "--mirror", "--all", "--tags"],
+    ],
+    decision = "forbidden",
+    justification = "オプションを追加せず、`git push origin HEAD` を使用する",
+    match = [
+        "git push origin HEAD --force",
+        "git push origin HEAD --force-with-lease",
+    ],
+)
+
+prefix_rule(
+    pattern = [
+        "git",
+        "push",
+        ["-u", "--set-upstream"],
+        "origin",
+        "HEAD",
+        ["--force", "-f", "--force-with-lease", "--delete", "-d", "--mirror", "--all", "--tags"],
+    ],
+    decision = "forbidden",
+    justification = "オプションを追加せず、現在の作業ブランチを通常pushする",
+    match = [
+        "git push -u origin HEAD --force",
+        "git push --set-upstream origin HEAD --force-with-lease",
+    ],
+)
+
+# ============================================================
+# GitHub authentication and inspection
+# ============================================================
+
+# 認証状態の確認は読み取り専用。認証の再設定自体はユーザーが行う。
+prefix_rule(
+    pattern = ["gh", "auth", "status"],
+    decision = "allow",
+    justification = "GitHub CLIの認証状態確認を許可する",
+    match = [
+        "gh auth status",
+        "gh auth status -h github.com",
+        "gh auth status --hostname github.com",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "repo", "view"],
+    decision = "allow",
+    justification = "対象GitHubリポジトリ情報の確認を許可する",
+    match = [
+        "gh repo view",
+        "gh repo view --json nameWithOwner,url",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "view"],
+    decision = "allow",
+    justification = "作成済みPull Requestの内容とURL確認を許可する",
+    match = [
+        "gh pr view",
+        "gh pr view --json number,title,url,state",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "status"],
+    decision = "allow",
+    justification = "現在ブランチに関連するPull Request状態の確認を許可する",
+    match = [
+        "gh pr status",
+    ],
+)
+
+# ============================================================
+# GitHub Pull Request
+# ============================================================
+
+prefix_rule(
+    pattern = ["gh", "pr", "create"],
+    decision = "allow",
+    justification = "明示された起点ブランチへのPull Request作成を許可する",
+    match = [
+        "gh pr create --base main --head feat/safety-gate --title Add safety gate --body Add focused validation",
+        "gh pr create --base develop --head fix/ingestion-safety --fill",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "merge"],
+    decision = "forbidden",
+    justification = "Pull Requestのmergeはユーザーが行う",
+    match = [
+        "gh pr merge 123",
+        "gh pr merge --squash --delete-branch",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", "close"],
+    decision = "forbidden",
+    justification = "Pull Requestを自動でcloseしない",
+    match = [
+        "gh pr close 123",
+    ],
+)
+
+# ============================================================
+# Destructive Git operations
+# ============================================================
+
+prefix_rule(
+    pattern = ["git", "reset"],
+    decision = "forbidden",
+    justification = "resetは使用せず、変更を保持したまま新しいcommitで修正する",
+    match = [
+        "git reset --hard HEAD",
+        "git reset --soft HEAD~1",
+        "git reset HEAD src/app.py",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "rebase"],
+    decision = "forbidden",
+    justification = "履歴を書き換えず、新しいcommitで修正する",
+    match = [
+        "git rebase main",
+        "git rebase -i HEAD~3",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "clean"],
+    decision = "forbidden",
+    justification = "未追跡ファイルを削除しない。必要な削除対象を個別に確認する",
+    match = [
+        "git clean -fd",
+        "git clean -xdf",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "restore"],
+    decision = "forbidden",
+    justification = "既存の未commit変更を破棄しない",
+    match = [
+        "git restore src/app.py",
+        "git restore --staged src/app.py",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "checkout", "--"],
+    decision = "forbidden",
+    justification = "既存の未commit変更を破棄しない。ブランチ作成は `git switch -c` を使用する",
+    match = [
+        "git checkout -- src/app.py",
+        "git checkout -- .",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "branch", ["-d", "-D", "--delete"]],
+    decision = "forbidden",
+    justification = "ローカルブランチを自動削除しない",
+    match = [
+        "git branch -d feat/example",
+        "git branch -D feat/example",
+        "git branch --delete feat/example",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "stash", ["drop", "clear"]],
+    decision = "forbidden",
+    justification = "stashを自動削除しない",
+    match = [
+        "git stash drop",
+        "git stash clear",
+    ],
+)

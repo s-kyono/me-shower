@@ -23,6 +23,15 @@ import yaml
 from jinja2 import Environment, FileSystemLoader
 from markdown_it import MarkdownIt
 
+from ingestion_safety import (
+    IngestionSafetyBlockedError,
+    IngestionSafetyError,
+    SafetyGateResult,
+    inspect_before_persistence,
+    persist_text_safely,
+    require_persistable,
+)
+
 
 app = typer.Typer(help="Generate career resume Markdown and PDF outputs.")
 
@@ -183,7 +192,7 @@ class FileSourceAdapter:
         for source in self.discover():
             if source.id == source_id:
                 return source
-        raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+        raise SourceNotFoundError("Unknown source id for file adapter.")
 
     def _build_raw_source(self, path: Path) -> RawSource:
         resolved = path.resolve()
@@ -226,7 +235,7 @@ class DailyReportSourceAdapter:
         for source in self.discover():
             if source.id == source_id:
                 return source
-        raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+        raise SourceNotFoundError("Unknown source id for daily report adapter.")
 
     def _build_raw_source(self, path: Path) -> RawSource:
         resolved = path.resolve()
@@ -353,7 +362,7 @@ class GitHubSourceAdapter:
             missing_error=SourceNotFoundError(f"Pull request not found: {source_id}"),
         )
         if not isinstance(payload, dict):
-            raise SourceAccessError(f"Failed to parse GitHub pull request detail for {source_id}.")
+            raise SourceAccessError("Failed to parse GitHub pull request detail.")
         return self._build_raw_source(payload)
 
     def _run_gh(
@@ -362,10 +371,13 @@ class GitHubSourceAdapter:
         *,
         missing_error: SourceAdapterError | None = None,
     ) -> Any:
+        command_unavailable = False
         try:
             result = self.command_runner(command)
-        except FileNotFoundError as exc:
-            raise SourceAccessError("GitHub CLI 'gh' is not installed or not available on PATH.") from exc
+        except FileNotFoundError:
+            command_unavailable = True
+        if command_unavailable:
+            raise SourceAccessError("GitHub CLI is unavailable.")
 
         if result.returncode != 0:
             stderr = sanitize_command_error(result.stderr)
@@ -375,23 +387,28 @@ class GitHubSourceAdapter:
             if "not logged into any hosts" in lowered or "authentication failed" in lowered:
                 raise SourceAccessError("GitHub CLI is not authenticated. Run 'gh auth login' and try again.")
             if "could not resolve to a repository" in lowered or "repository not found" in lowered:
-                raise SourceAccessError(f"GitHub repository is not accessible: {self.repo}")
+                raise SourceAccessError("GitHub repository is not accessible.")
             if stderr:
-                raise SourceAccessError(f"GitHub CLI command failed: {stderr}")
+                raise SourceAccessError("GitHub CLI command failed.")
             raise SourceAccessError("GitHub CLI command failed.")
 
+        parse_failed = False
         try:
-            return json.loads(result.stdout or "null")
-        except json.JSONDecodeError as exc:
-            raise SourceAccessError("Failed to parse JSON output from GitHub CLI.") from exc
+            parsed = json.loads(result.stdout or "null")
+        except json.JSONDecodeError:
+            parse_failed = True
+            parsed = None
+        if parse_failed:
+            raise SourceAccessError("Failed to parse GitHub CLI output.")
+        return parsed
 
     def _parse_source_id(self, source_id: str) -> int:
         prefix = f"github:{self.repo}:pr:"
         if not source_id.startswith(prefix):
-            raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+            raise SourceNotFoundError("Unknown source id for GitHub adapter.")
         number_text = source_id.removeprefix(prefix)
         if not number_text.isdigit():
-            raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+            raise SourceNotFoundError("Unknown source id for GitHub adapter.")
         return int(number_text)
 
     def _build_raw_source(self, payload: dict[str, Any]) -> RawSource:
@@ -527,21 +544,25 @@ def call_slack_api(method: str, params: dict[str, Any], *, token: str) -> dict[s
         },
         method="POST",
     )
+    failure_message: str | None = None
     try:
         with urlopen(request) as response:
             payload = response.read().decode("utf-8")
     except HTTPError as exc:
-        message = sanitize_slack_error_message(exc.read().decode("utf-8", errors="replace") or str(exc))
-        if exc.code == 429:
-            raise SourceAccessError("Slack API rate limit exceeded.") from exc
-        raise SourceAccessError(f"Slack API request failed: {message or 'http error'}") from exc
-    except URLError as exc:
-        raise SourceAccessError(f"Slack API request failed: {sanitize_slack_error_message(str(exc.reason))}") from exc
+        failure_message = "Slack API rate limit exceeded." if exc.code == 429 else "Slack API request failed."
+    except URLError:
+        failure_message = "Slack API request failed."
+    if failure_message is not None:
+        raise SourceAccessError(failure_message)
 
+    parse_failed = False
     try:
         parsed = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        raise SourceAccessError("Failed to parse Slack API JSON response.") from exc
+    except json.JSONDecodeError:
+        parse_failed = True
+        parsed = None
+    if parse_failed:
+        raise SourceAccessError("Failed to parse Slack API response.")
     if not isinstance(parsed, dict):
         raise SourceAccessError("Failed to parse Slack API response.")
     return parsed
@@ -560,27 +581,38 @@ def call_graph_api(path: str, params: dict[str, Any], *, token: str) -> dict[str
         },
         method="GET",
     )
+    failure_type: type[SourceAdapterError] | None = None
+    failure_message: str | None = None
     try:
         with urlopen(request) as response:
             payload = response.read().decode("utf-8")
     except HTTPError as exc:
-        message = sanitize_graph_error_message(exc.read().decode("utf-8", errors="replace") or str(exc))
         if exc.code == 401:
-            raise SourceAccessError("Microsoft Graph token is invalid or expired.") from exc
-        if exc.code == 403:
-            raise SourceAccessError("Microsoft Graph access denied for the requested Teams channel.") from exc
-        if exc.code == 404:
-            raise SourceNotFoundError("Teams team, channel, or message was not found.") from exc
-        if exc.code == 429:
-            raise SourceAccessError("Microsoft Graph API rate limit exceeded.") from exc
-        raise SourceAccessError(f"Microsoft Graph API request failed: {message or 'http error'}") from exc
-    except URLError as exc:
-        raise SourceAccessError(f"Microsoft Graph API request failed: {sanitize_graph_error_message(str(exc.reason))}") from exc
+            failure_message = "Microsoft Graph token is invalid or expired."
+        elif exc.code == 403:
+            failure_message = "Microsoft Graph access denied for the requested Teams channel."
+        elif exc.code == 404:
+            failure_type = SourceNotFoundError
+            failure_message = "Teams team, channel, or message was not found."
+        elif exc.code == 429:
+            failure_message = "Microsoft Graph API rate limit exceeded."
+        else:
+            failure_message = "Microsoft Graph API request failed."
+        failure_type = failure_type or SourceAccessError
+    except URLError:
+        failure_type = SourceAccessError
+        failure_message = "Microsoft Graph API request failed."
+    if failure_type is not None and failure_message is not None:
+        raise failure_type(failure_message)
 
+    parse_failed = False
     try:
         parsed = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        raise SourceAccessError("Failed to parse Microsoft Graph API JSON response.") from exc
+    except json.JSONDecodeError:
+        parse_failed = True
+        parsed = None
+    if parse_failed:
+        raise SourceAccessError("Failed to parse Microsoft Graph API response.")
     if not isinstance(parsed, dict):
         raise SourceAccessError("Failed to parse Microsoft Graph API response.")
     return parsed
@@ -613,7 +645,7 @@ class SlackSourceAdapter:
         for source in self.discover():
             if source.id == source_id:
                 return source
-        raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+        raise SourceNotFoundError("Unknown source id for Slack adapter.")
 
     def _fetch_messages(self) -> list[dict[str, Any]]:
         payload = self._call_api(
@@ -634,12 +666,16 @@ class SlackSourceAdapter:
     def _call_api(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         token = self._resolve_token()
         caller = self._api_caller or (lambda api_method, api_params: call_slack_api(api_method, api_params, token=token))
+        unexpected_failure = False
         try:
             payload = caller(method, params)
         except SourceAdapterError:
             raise
-        except Exception as exc:
-            raise SourceAccessError(f"Slack API request failed: {sanitize_slack_error_message(str(exc))}") from exc
+        except Exception:
+            unexpected_failure = True
+            payload = None
+        if unexpected_failure:
+            raise SourceAccessError("Slack API request failed.")
         if not isinstance(payload, dict):
             raise SourceAccessError("Failed to parse Slack API response.")
         if payload.get("ok") is False:
@@ -649,7 +685,7 @@ class SlackSourceAdapter:
     def _resolve_token(self) -> str:
         token = os.getenv(self.token_env, "").strip()
         if not token:
-            raise SourceAccessError(f"Slack token environment variable is not set: {self.token_env}")
+            raise SourceAccessError("Slack token environment variable is not configured.")
         return token
 
     def _build_api_error(self, payload: dict[str, Any]) -> SourceAdapterError:
@@ -658,10 +694,10 @@ class SlackSourceAdapter:
         if normalized_error_code in {"channel_not_found", "message_not_found"}:
             return SourceNotFoundError(f"Slack resource not found: {normalized_error_code}")
         if normalized_error_code in {"not_in_channel", "missing_scope", "invalid_auth", "not_authed", "account_inactive"}:
-            return SourceAccessError(f"Slack API access denied: {normalized_error_code}")
+            return SourceAccessError("Slack API access denied.")
         if normalized_error_code == "ratelimited":
             return SourceAccessError("Slack API rate limit exceeded.")
-        return SourceAccessError(f"Slack API request failed: {sanitize_slack_error_message(error_code)}")
+        return SourceAccessError("Slack API request failed.")
 
     def _build_raw_source(self, payload: dict[str, Any]) -> RawSource:
         ts = str(payload.get("ts") or "").strip()
@@ -769,7 +805,7 @@ class TeamsSourceAdapter:
         for source in self.discover():
             if source.id == source_id:
                 return source
-        raise SourceNotFoundError(f"Unknown source id for adapter '{self.name}': {source_id}")
+        raise SourceNotFoundError("Unknown source id for Teams adapter.")
 
     def _fetch_messages(self) -> list[dict[str, Any]]:
         payload = self._call_api(
@@ -785,12 +821,16 @@ class TeamsSourceAdapter:
     def _call_api(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         token = self._resolve_token()
         caller = self._api_caller or (lambda api_path, api_params: call_graph_api(api_path, api_params, token=token))
+        unexpected_failure = False
         try:
             payload = caller(path, params)
         except SourceAdapterError:
             raise
-        except Exception as exc:
-            raise SourceAccessError(f"Microsoft Graph API request failed: {sanitize_graph_error_message(str(exc))}") from exc
+        except Exception:
+            unexpected_failure = True
+            payload = None
+        if unexpected_failure:
+            raise SourceAccessError("Microsoft Graph API request failed.")
         if not isinstance(payload, dict):
             raise SourceAccessError("Failed to parse Microsoft Graph API response.")
         if "error" in payload:
@@ -800,7 +840,7 @@ class TeamsSourceAdapter:
     def _resolve_token(self) -> str:
         token = os.getenv(self.token_env, "").strip()
         if not token:
-            raise SourceAccessError(f"Microsoft Graph token environment variable is not set: {self.token_env}")
+            raise SourceAccessError("Microsoft Graph token environment variable is not configured.")
         return token
 
     def _build_api_error(self, payload: dict[str, Any]) -> SourceAdapterError:
@@ -821,7 +861,7 @@ class TeamsSourceAdapter:
             return SourceAccessError("Microsoft Graph access denied for the requested Teams channel.")
         if normalized in {"toomanyrequests", "throttledrequest"}:
             return SourceAccessError("Microsoft Graph API rate limit exceeded.")
-        return SourceAccessError(f"Microsoft Graph API request failed: {full_message or code}")
+        return SourceAccessError("Microsoft Graph API request failed.")
 
     def _is_within_range(self, created_at: str) -> bool:
         if not created_at:
@@ -1036,6 +1076,59 @@ def load_sensitive_label_rules() -> dict[str, Any]:
     return load_rule_file("sensitive_labels.yaml")
 
 
+def ingestion_safety_rule_path() -> Path:
+    return rule_file_path("real_data_ingestion_safety.yaml")
+
+
+def persist_safety_checked_text(path: Path, content: str) -> None:
+    persist_text_safely(path, content, rule_path=ingestion_safety_rule_path())
+
+
+def inspect_raw_source_safety(raw_source: RawSource) -> tuple[RawSource, SafetyGateResult]:
+    result = inspect_before_persistence(
+        {
+            "id": raw_source.id,
+            "source_type": raw_source.source_type,
+            "origin": raw_source.origin,
+            "title": raw_source.title,
+            "content": raw_source.content,
+            "captured_at": raw_source.captured_at,
+            "metadata": raw_source.metadata,
+        },
+        rule_path=ingestion_safety_rule_path(),
+    )
+    candidate = require_persistable(result).unwrap()
+    return RawSource(**candidate), result
+
+
+def echo_safe_source_inspection(raw_source: RawSource, *, index: int) -> None:
+    try:
+        result = inspect_before_persistence(
+            {
+                "id": raw_source.id, "source_type": raw_source.source_type, "origin": raw_source.origin,
+                "title": raw_source.title, "content": raw_source.content,
+                "captured_at": raw_source.captured_at, "metadata": raw_source.metadata,
+            },
+            rule_path=ingestion_safety_rule_path(),
+        )
+    except IngestionSafetyError:
+        typer.echo(f"- source_index: {index}")
+        typer.echo("  outcome: blocked")
+        typer.echo("  error: safety_inspection_failed")
+        return
+    typer.echo(f"- source_index: {index}")
+    typer.echo(f"  outcome: {result.outcome}")
+    typer.echo(f"  finding_count: {sum(result.audit_report.finding_counts.values())}")
+    typer.echo(f"  sanitized_category_count: {len(result.audit_report.sanitized_categories)}")
+    typer.echo(f"  blocked_category_count: {len(result.audit_report.blocked_categories)}")
+
+
+def echo_safe_adapter_failure(*, adapter: str, operation: str) -> None:
+    typer.echo(f"{operation} failed", err=True)
+    typer.echo("error_code: adapter_access_failed", err=True)
+    typer.echo(f"adapter: {adapter}", err=True)
+
+
 def redact_sensitive_text(message: str) -> tuple[str, list[dict[str, str]]]:
     findings: list[dict[str, str]] = []
     redacted = message
@@ -1085,11 +1178,6 @@ def build_guard_report(
         grouped[finding["category"]] = grouped.get(finding["category"], 0) + 1
 
     summary_lines = [f"- {category}: {count}" for category, count in sorted(grouped.items())]
-    detail_lines = [
-        f"| {finding['category']} | {finding['replacement']} | line {finding['line']} |"
-        for finding in findings
-    ]
-
     return f"""## {timestamp} {action_label} redaction
 
 ### Event
@@ -1098,15 +1186,9 @@ def build_guard_report(
 ### Findings
 {chr(10).join(summary_lines) if summary_lines else "- 検出なし"}
 
-### Details
-| Category | Replacement | Line |
-| --- | --- | --- |
-{chr(10).join(detail_lines) if detail_lines else "| none | none | - |"}
-
-### Stored Message
-```text
-{redacted_message}
-```
+### Content Policy
+- raw_value_included: false
+- sanitized_content_included: false
 """
 
 
@@ -1117,7 +1199,7 @@ def append_guard_report(report: str, report_date: str) -> Path:
         content = report_path.read_text(encoding="utf-8").rstrip() + "\n\n" + report.rstrip() + "\n"
     else:
         content = "# Guard Review\n\n" + report.rstrip() + "\n"
-    report_path.write_text(content, encoding="utf-8")
+    persist_safety_checked_text(report_path, content)
     return report_path
 
 
@@ -2563,7 +2645,7 @@ def calculate_source_confidence(
     reasons.append(f"source_type:{normalized_source_type}")
 
     metadata_values = [value for value in raw_source.metadata.values() if value not in ("", None, [], {})]
-    if raw_source.id.strip():
+    if safe_source_id(raw_source) is not None:
         score += confidence_signal_value(rules, "signals", "source_id_present")
         reasons.append("source_id:present")
     else:
@@ -2656,10 +2738,38 @@ def build_source_reference_path(raw_source: RawSource) -> Path:
     return Path(raw_source.title or raw_source.id)
 
 
+def safe_source_reference_detail(raw_source: RawSource) -> str | None:
+    """Return only a usable local reference; redacted or non-resolvable references leave no trace."""
+    candidates = [raw_source.origin, raw_source.metadata.get("source_reference"), raw_source.metadata.get("path")]
+    for candidate in candidates:
+        if not isinstance(candidate, str) or not candidate.strip() or "[REDACTED_" in candidate:
+            continue
+        path = Path(candidate.strip())
+        if path.exists():
+            return path.name
+    return None
+
+
+def safe_source_id(raw_source: RawSource) -> str | None:
+    source_id = raw_source.id.strip()
+    if not source_id or "[REDACTED_" in source_id:
+        return None
+    return source_id
+
+
 def build_canonical_event_from_raw_source(raw_source: RawSource) -> dict[str, Any]:
+    raw_source, safety_result = inspect_raw_source_safety(raw_source)
     source_path = build_source_reference_path(raw_source)
     raw_text = raw_source.content
-    redacted_text, findings = redact_sensitive_text(raw_text)
+    redacted_text, legacy_findings = redact_sensitive_text(raw_text)
+    findings = [
+        {
+            "category": finding.category.upper(),
+            "replacement": f"[REDACTED_{finding.category.upper()}]",
+            "line": "field",
+        }
+        for finding in safety_result.findings
+    ] + legacy_findings
     date_text = extract_source_date(source_path, redacted_text, fallback=raw_source.captured_at)
     source_type = raw_source.source_type or detect_source_type(source_path, redacted_text)
     lines = split_source_lines(redacted_text)
@@ -2731,10 +2841,25 @@ def build_canonical_event_from_raw_source(raw_source: RawSource) -> dict[str, An
         guard_findings=findings,
     )
 
+    evidence = [
+        {
+            "kind": str(load_evidence_rules().get("excerpt_kind", "redacted_excerpt")),
+            "detail": evidence_excerpt,
+        },
+    ]
+    source_reference = safe_source_reference_detail(raw_source)
+    if source_reference is not None:
+        evidence.append(
+            {
+                "kind": str(load_evidence_rules().get("source_reference_kind", "source_reference")),
+                "detail": source_reference,
+            }
+        )
+
     return {
         "schema": str(load_evidence_rules().get("schema", "canonical_event_v0")),
         "date": date_text,
-        "source_id": raw_source.id,
+        "source_id": safe_source_id(raw_source),
         "source_type": source_type,
         "category": dominant_category if kept_lines else "noise",
         "summary": summary,
@@ -2746,19 +2871,11 @@ def build_canonical_event_from_raw_source(raw_source: RawSource) -> dict[str, An
         "noise_removed": dedupe_preserving_order(sorted(set(noise_categories))),
         "confidence": confidence.level,
         "confidence_reasons": confidence.reasons,
-        "evidence": [
-            {
-                "kind": str(load_evidence_rules().get("excerpt_kind", "redacted_excerpt")),
-                "detail": evidence_excerpt,
-            },
-            {
-                "kind": str(load_evidence_rules().get("source_reference_kind", "source_reference")),
-                "detail": source_path.name,
-            },
-        ],
+        "evidence": evidence,
         "_guard_findings": findings,
         "_source_path": source_path,
         "_raw_source": raw_source,
+        "_safety_gate_result": safety_result,
     }
 
 
@@ -2822,7 +2939,6 @@ def format_canonical_event(event: dict[str, Any]) -> str:
     lines = [
         "- schema: " + str(event["schema"]),
         "- date: " + str(event["date"]),
-        "  source_id: " + str(event.get("source_id", "unknown")),
         "  source_type: " + str(event["source_type"]),
         "  category: " + str(event["category"]),
         "  summary: " + str(event["summary"]),
@@ -2844,6 +2960,9 @@ def format_canonical_event(event: dict[str, Any]) -> str:
         "  evidence:",
         render_evidence(event["evidence"]),
     ]
+    source_id = event.get("source_id")
+    if isinstance(source_id, str) and source_id:
+        lines.insert(2, "  source_id: " + source_id)
     return "\n".join(lines)
 
 
@@ -3140,12 +3259,10 @@ def build_review_queue(
 ) -> tuple[Path, Path | None, int]:
     items = filter_review_queue_items(read_review_queue_items(source_sync_dir), from_date=from_date, to_date=to_date,
         source_type=source_type, confidence=confidence, readiness=readiness, limit=limit)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(render_review_queue_markdown(items, source_sync_dir=source_sync_dir), encoding="utf-8")
+    persist_safety_checked_text(output_path, render_review_queue_markdown(items, source_sync_dir=source_sync_dir))
     written_jsonl: Path | None = None
     if jsonl_output_path is not None:
-        jsonl_output_path.parent.mkdir(parents=True, exist_ok=True)
-        jsonl_output_path.write_text(render_review_queue_jsonl(items), encoding="utf-8")
+        persist_safety_checked_text(jsonl_output_path, render_review_queue_jsonl(items))
         written_jsonl = jsonl_output_path
     return output_path, written_jsonl, len(items)
 
@@ -3487,15 +3604,10 @@ def build_source_timeline(
     jsonl_output_path: Path | None = SOURCE_TIMELINE_JSONL_PATH,
 ) -> tuple[Path, Path | None, int]:
     items = read_source_timeline_items(source_sync_dir)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        render_source_timeline_markdown(items, source_sync_dir=source_sync_dir),
-        encoding="utf-8",
-    )
+    persist_safety_checked_text(output_path, render_source_timeline_markdown(items, source_sync_dir=source_sync_dir))
     written_jsonl_path: Path | None = None
     if jsonl_output_path is not None:
-        jsonl_output_path.parent.mkdir(parents=True, exist_ok=True)
-        jsonl_output_path.write_text(render_source_timeline_jsonl(items), encoding="utf-8")
+        persist_safety_checked_text(jsonl_output_path, render_source_timeline_jsonl(items))
         written_jsonl_path = jsonl_output_path
     return output_path, written_jsonl_path, len(items)
 
@@ -3547,7 +3659,6 @@ def extract_source_id_from_event_block(block: str) -> str | None:
 
 
 def write_source_sync_file(target_date: str, events: list[dict[str, Any]]) -> Path:
-    SOURCE_SYNC_DIR.mkdir(parents=True, exist_ok=True)
     output_path = SOURCE_SYNC_DIR / f"{target_date}.md"
     _, existing_blocks = read_source_sync_event_blocks(output_path)
     existing_source_ids = {source_id for block in existing_blocks if (source_id := extract_source_id_from_event_block(block))}
@@ -3570,7 +3681,8 @@ def write_source_sync_file(target_date: str, events: list[dict[str, Any]]) -> Pa
         body.append(f"## Event {index}")
         body.append(block)
         body.append("")
-    output_path.write_text("\n".join(body).rstrip() + "\n", encoding="utf-8")
+    serialized = "\n".join(body).rstrip() + "\n"
+    persist_safety_checked_text(output_path, serialized)
     return output_path
 
 
@@ -3649,10 +3761,14 @@ def parse_cli_datetime(value: str | None) -> str | None:
 
 
 def slack_ts_to_datetime(value: str) -> datetime:
+    parse_failed = False
     try:
         timestamp = float(value)
-    except ValueError as exc:
-        raise SourceAccessError(f"Invalid Slack timestamp: {value}") from exc
+    except ValueError:
+        parse_failed = True
+        timestamp = 0.0
+    if parse_failed:
+        raise SourceAccessError("Invalid Slack timestamp.")
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone()
 
 
@@ -3670,10 +3786,14 @@ def teams_datetime_to_datetime(value: str) -> datetime:
     normalized = value.strip()
     if normalized.endswith("Z"):
         normalized = normalized[:-1] + "+00:00"
+    parse_failed = False
     try:
         parsed = datetime.fromisoformat(normalized)
-    except ValueError as exc:
-        raise SourceAccessError(f"Invalid Teams datetime: {value}") from exc
+    except ValueError:
+        parse_failed = True
+        parsed = datetime.fromtimestamp(0, tz=timezone.utc)
+    if parse_failed:
+        raise SourceAccessError("Invalid Teams datetime.")
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone()
@@ -3769,18 +3889,23 @@ def issue_resume(title: str, note: str, theme: str = "forest") -> Path:
 def add_log(message: str = typer.Option("", "--message", "-m", help="Log message to append.")) -> None:
     """Append a simple event log entry."""
     events_dir = DATA_DIR / "events"
-    events_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     today = datetime.now().strftime("%Y-%m-%d")
     path = events_dir / f"{timestamp}.yaml"
-    redacted_message, findings = redact_sensitive_text(message or "手動ログ")
+    gate_result = inspect_before_persistence(message or "手動ログ", rule_path=ingestion_safety_rule_path())
+    safe_candidate = require_persistable(gate_result).unwrap()
+    redacted_message, legacy_findings = redact_sensitive_text(safe_candidate)
+    findings = [
+        {"category": finding.category.upper(), "replacement": "", "line": "field"}
+        for finding in gate_result.findings
+    ] + legacy_findings
     payload = {
         "date": today,
         "type": "manual_log",
         "message": redacted_message,
     }
-    with path.open("w", encoding="utf-8") as file:
-        yaml.safe_dump(payload, file, allow_unicode=True, sort_keys=False)
+    serialized = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+    persist_text_safely(path, serialized, rule_path=ingestion_safety_rule_path())
     report_path = maybe_write_guard_report(
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         report_date=today,
@@ -4013,14 +4138,50 @@ def normalize_source(
     file: str = typer.Option(..., "--file", "-f", help="Raw source text file to normalize."),
 ) -> None:
     """Normalize one raw source text file into a canonical event markdown file."""
-    output_path = normalize_source_file(file)
+    try:
+        output_path = normalize_source_file(file)
+    except IngestionSafetyError:
+        typer.echo("Source normalization denied by the ingestion safety gate.", err=True)
+        raise typer.Exit(2)
     typer.echo(f"Normalized source: {output_path.relative_to(ROOT)}")
+
+
+@app.command("inspect-ingestion-safety")
+def inspect_ingestion_safety(
+    input: str = typer.Option(..., "--input", help="Text or Markdown source to inspect without persisting content."),
+) -> None:
+    """Print category-level safety metadata without printing source content or matches."""
+    try:
+        input_path = resolve_input_path(input)
+        result = inspect_before_persistence(
+            input_path.read_text(encoding="utf-8", errors="replace"),
+            rule_path=ingestion_safety_rule_path(),
+        )
+    except (OSError, IngestionSafetyError):
+        typer.echo("outcome: blocked")
+        typer.echo("error: safety_inspection_failed")
+        raise typer.Exit(1)
+    typer.echo(f"outcome: {result.outcome}")
+    typer.echo(f"finding_count: {sum(result.audit_report.finding_counts.values())}")
+    typer.echo("sanitized_categories:")
+    for category in result.audit_report.sanitized_categories:
+        typer.echo(f"  - {category}")
+    typer.echo("blocked_categories:")
+    for category in result.audit_report.blocked_categories:
+        typer.echo(f"  - {category}")
+    typer.echo("raw_values_logged: false")
+    if result.outcome == "blocked":
+        raise typer.Exit(2)
 
 
 @app.command("normalize-sources")
 def normalize_sources() -> None:
     """Normalize all raw source text files under data/raw_sources/."""
-    output_paths = normalize_all_sources()
+    try:
+        output_paths = normalize_all_sources()
+    except IngestionSafetyError:
+        typer.echo("Source normalization denied by the ingestion safety gate.", err=True)
+        raise typer.Exit(2)
     if not output_paths:
         typer.echo("No raw source files found.")
         return
@@ -4038,17 +4199,14 @@ def inspect_github_source(
     adapter = GitHubSourceAdapter(repo=repo, limit=limit)
     try:
         sources = adapter.discover()
-    except SourceAdapterError as exc:
-        typer.echo(f"GitHub source inspection failed: {exc}", err=True)
+    except SourceAdapterError:
+        echo_safe_adapter_failure(adapter="github", operation="source_inspection")
         raise typer.Exit(1)
 
     typer.echo(f"adapter: {adapter.name}")
-    typer.echo(f"repo: {repo}")
     typer.echo(f"discovered_sources: {len(sources)}")
-    for source in sources:
-        typer.echo(f"- id: {source.id}")
-        typer.echo(f"  title: {source.title}")
-        typer.echo(f"  origin: {source.origin}")
+    for index, source in enumerate(sources, start=1):
+        echo_safe_source_inspection(source, index=index)
 
 
 @app.command("inspect-daily-report")
@@ -4058,15 +4216,12 @@ def inspect_daily_report(
     """Inspect one daily report as a raw source."""
     try:
         source = inspect_daily_report_file(file)
-    except SourceAdapterError as exc:
-        typer.echo(f"Daily report inspection failed: {exc}", err=True)
+    except SourceAdapterError:
+        echo_safe_adapter_failure(adapter="daily_report", operation="source_inspection")
         raise typer.Exit(1)
 
     typer.echo("adapter: daily_report")
-    typer.echo(f"id: {source.id}")
-    typer.echo(f"title: {source.title}")
-    typer.echo(f"origin: {source.origin}")
-    typer.echo(f"detected_date: {source.metadata.get('detected_date', source.captured_at)}")
+    echo_safe_source_inspection(source, index=1)
 
 
 @app.command("inspect-daily-reports")
@@ -4079,17 +4234,14 @@ def inspect_daily_reports(
     adapter = DailyReportSourceAdapter(reports_dir=reports_dir, limit=limit)
     try:
         sources = adapter.discover()
-    except SourceAdapterError as exc:
-        typer.echo(f"Daily report inspection failed: {exc}", err=True)
+    except SourceAdapterError:
+        echo_safe_adapter_failure(adapter="daily_report", operation="source_inspection")
         raise typer.Exit(1)
 
     typer.echo(f"adapter: {adapter.name}")
-    typer.echo(f"reports_dir: {display_path(reports_dir)}")
     typer.echo(f"discovered_sources: {len(sources)}")
-    for source in sources:
-        typer.echo(f"- id: {source.id}")
-        typer.echo(f"  title: {source.title}")
-        typer.echo(f"  origin: {source.origin}")
+    for index, source in enumerate(sources, start=1):
+        echo_safe_source_inspection(source, index=index)
 
 
 @app.command("inspect-slack-source")
@@ -4110,17 +4262,14 @@ def inspect_slack_source(
     )
     try:
         sources = adapter.discover()
-    except SourceAdapterError as exc:
-        typer.echo(f"Slack source inspection failed: {exc}", err=True)
+    except SourceAdapterError:
+        echo_safe_adapter_failure(adapter="slack", operation="source_inspection")
         raise typer.Exit(1)
 
     typer.echo(f"adapter: {adapter.name}")
-    typer.echo(f"channel: {channel}")
     typer.echo(f"discovered_sources: {len(sources)}")
-    for source in sources:
-        typer.echo(f"- id: {source.id}")
-        typer.echo(f"  title: {source.title}")
-        typer.echo(f"  origin: {source.origin}")
+    for index, source in enumerate(sources, start=1):
+        echo_safe_source_inspection(source, index=index)
 
 
 @app.command("inspect-teams-source")
@@ -4143,18 +4292,14 @@ def inspect_teams_source(
     )
     try:
         sources = adapter.discover()
-    except SourceAdapterError as exc:
-        typer.echo(f"Teams source inspection failed: {exc}", err=True)
+    except SourceAdapterError:
+        echo_safe_adapter_failure(adapter="teams", operation="source_inspection")
         raise typer.Exit(1)
 
     typer.echo(f"adapter: {adapter.name}")
-    typer.echo(f"team_id: {team_id}")
-    typer.echo(f"channel_id: {channel_id}")
     typer.echo(f"discovered_sources: {len(sources)}")
-    for source in sources:
-        typer.echo(f"- id: {source.id}")
-        typer.echo(f"  title: {source.title}")
-        typer.echo(f"  origin: {source.origin}")
+    for index, source in enumerate(sources, start=1):
+        echo_safe_source_inspection(source, index=index)
 
 
 @app.command("normalize-github-source")
@@ -4165,8 +4310,8 @@ def normalize_github_source(
     """Normalize GitHub pull requests into canonical event markdown files."""
     try:
         output_paths = normalize_github_sources(repo=repo, limit=limit)
-    except SourceAdapterError as exc:
-        typer.echo(f"GitHub source normalization failed: {exc}", err=True)
+    except (SourceAdapterError, IngestionSafetyError):
+        echo_safe_adapter_failure(adapter="github", operation="source_normalization")
         raise typer.Exit(1)
 
     if not output_paths:
@@ -4184,8 +4329,8 @@ def import_daily_report(
     """Normalize one daily report into canonical event markdown."""
     try:
         output_path = normalize_daily_report_file(file)
-    except SourceAdapterError as exc:
-        typer.echo(f"Daily report import failed: {exc}", err=True)
+    except (SourceAdapterError, IngestionSafetyError):
+        echo_safe_adapter_failure(adapter="daily_report", operation="source_normalization")
         raise typer.Exit(1)
 
     typer.echo(f"Imported daily report: {output_path.relative_to(ROOT)}")
@@ -4199,8 +4344,8 @@ def import_daily_reports(
     """Normalize daily reports under a directory into canonical event markdown."""
     try:
         output_paths = normalize_daily_reports_dir(dir, limit=limit)
-    except SourceAdapterError as exc:
-        typer.echo(f"Daily report import failed: {exc}", err=True)
+    except (SourceAdapterError, IngestionSafetyError):
+        echo_safe_adapter_failure(adapter="daily_report", operation="source_normalization")
         raise typer.Exit(1)
 
     if not output_paths:
@@ -4228,8 +4373,8 @@ def normalize_slack_source(
             oldest=parse_cli_datetime(oldest),
             latest=parse_cli_datetime(latest),
         )
-    except SourceAdapterError as exc:
-        typer.echo(f"Slack source normalization failed: {exc}", err=True)
+    except (SourceAdapterError, IngestionSafetyError):
+        echo_safe_adapter_failure(adapter="slack", operation="source_normalization")
         raise typer.Exit(1)
 
     if not output_paths:
@@ -4259,8 +4404,8 @@ def normalize_teams_source(
             oldest=parse_iso_datetime(oldest),
             latest=parse_iso_datetime(latest),
         )
-    except SourceAdapterError as exc:
-        typer.echo(f"Teams source normalization failed: {exc}", err=True)
+    except (SourceAdapterError, IngestionSafetyError):
+        echo_safe_adapter_failure(adapter="teams", operation="source_normalization")
         raise typer.Exit(1)
 
     if not output_paths:
@@ -4287,18 +4432,16 @@ def inspect_source_adapter(
     source_adapter = build_source_adapter_registry().get(adapter)
     try:
         sources = source_adapter.discover()
-    except SourceAdapterError as exc:
-        typer.echo(f"Source adapter inspection failed: {exc}", err=True)
+    except SourceAdapterError:
+        echo_safe_adapter_failure(adapter=source_adapter.name, operation="source_inspection")
         raise typer.Exit(1)
 
     typer.echo(f"adapter: {source_adapter.name}")
     typer.echo(f"discovered_sources: {len(sources)}")
     if not sources:
         return
-    for source in sources:
-        typer.echo(f"- id: {source.id}")
-        typer.echo(f"  title: {source.title}")
-        typer.echo(f"  origin: {source.origin}")
+    for index, source in enumerate(sources, start=1):
+        echo_safe_source_inspection(source, index=index)
 
 
 @app.command("generate-pdf")

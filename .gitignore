@@ -12,7 +12,12 @@ __pycache__/
 !.codex/loop-skills/**
 !.codex/review-promotion/
 !.codex/review-promotion/**
+!.codex/source-intelligence/
+!.codex/source-intelligence/**
+!.codex/rules
+!.codex/rules/**
 .codex/**/.DS_Store
+!.codex/config.toml
 
 # Original source documents and local reference assets.
 *.pdf

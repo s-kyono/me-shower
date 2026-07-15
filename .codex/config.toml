@@ -1,0 +1,3 @@
+# プロジェクト内のファイル操作は自動許可
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"

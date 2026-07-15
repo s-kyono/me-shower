@@ -63,6 +63,14 @@ me-shower/
 
 ## 実行場所
 
+## Real Data Ingestion Safety Gate
+
+Real work sources pass through a fail-closed safety gate before persistence. Raw source, credentials, private URLs, and sensitive values are never stored as-is. The gate produces only sanitized content and safe category-level audit metadata.
+
+The gate returns only `pass`, `pass_with_sanitization`, or `blocked`. Blocked sources never reach Canonical Event extraction or persistence. Inspection, rule-loading, and sanitized-output recheck failures also deny persistence.
+
+Source persistence uses `persist_text_safely`, which snapshots and reinspects the current value immediately before a private atomic write. Wrappers improve API clarity but are not trusted as the security boundary, so mutated or forged wrappers are blocked by final reinspection. Unsupported detector categories and rule/runtime contract drift fail closed. Source inspection commands print safe ordinal/category metadata, and Adapter failures return fixed safe error codes without original exception text.
+
 各種コマンドは `app/` 配下で実行します。
 
 ```bash
@@ -89,6 +97,9 @@ uv run me-shower add-log --message "職務経歴データを更新"
 
 # raw source を 1 件正規化
 uv run me-shower normalize-source --file app/data/raw_sources/sample.txt
+
+# Source を保存せず、安全カテゴリだけを検査
+uv run me-shower inspect-ingestion-safety --input path/to/synthetic-fixture.md
 
 # raw source を一括正規化
 uv run me-shower normalize-sources
