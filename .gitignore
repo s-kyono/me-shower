@@ -18,6 +18,8 @@ __pycache__/
 !.codex/source-intelligence/**
 !.codex/rules
 !.codex/rules/**
+!.codex/tools/
+!.codex/tools/**
 .codex/**/.DS_Store
 !.codex/config.toml
 

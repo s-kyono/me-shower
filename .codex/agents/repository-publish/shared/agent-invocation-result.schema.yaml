@@ -1,0 +1,47 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/repository-publish-agent-invocation-result.schema.yaml"
+title: "Repository Publish Agent Invocation Result"
+type: object
+additionalProperties: false
+required:
+  - schema_version
+  - target_agent
+  - repository_publish_run_id
+  - status
+  - handoff_reference
+  - result_reference
+  - error_code
+properties:
+  schema_version: {const: "1.0"}
+  target_agent: {const: repository-publish}
+  repository_publish_run_id:
+    type: string
+    pattern: "^rpr-[0-9a-f]{64}$"
+  status:
+    enum: [invoked, deduplicated, invocation_failed]
+  handoff_reference:
+    type: string
+    minLength: 1
+  result_reference:
+    anyOf:
+      - type: string
+        minLength: 1
+      - type: "null"
+  error_code:
+    anyOf:
+      - type: string
+        minLength: 1
+      - type: "null"
+allOf:
+  - if:
+      properties:
+        status: {const: invocation_failed}
+    then:
+      properties:
+        error_code: {type: string, minLength: 1}
+  - if:
+      properties:
+        status: {enum: [invoked, deduplicated]}
+    then:
+      properties:
+        error_code: {type: "null"}

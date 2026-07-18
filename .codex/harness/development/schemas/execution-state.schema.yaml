@@ -12,8 +12,7 @@ required:
   - execution
   - review
   - release_gate
-  - git
-  - pull_request
+  - downstream
   - blocking_issues
   - warnings
   - extensions
@@ -29,19 +28,14 @@ properties:
     enum:
       - execution_started
       - execution_context_ready
-      - implementing
       - implementation_completed
-      - reviewing
       - changes_required
       - fixing
       - review_accepted
-      - release_gate_running
       - release_gate_failed
       - release_gate_passed
-      - publishing
-      - branch_pushed
-      - creating_pull_request
-      - pr_created
+      - repository_publish_handoff_ready
+      - development_completed
       - blocked
       - aborted
   revision:
@@ -164,52 +158,77 @@ properties:
               - failed
               - blocked
           - type: "null"
-  git:
+  downstream:
     type: object
     additionalProperties: false
     required:
-      - branch
-      - base_branch
-      - commit_sha
-      - pushed
+      - agent
+      - handoff_reference
+      - run_id
+      - status
+      - result_reference
+      - next_action
     properties:
-      branch:
+      agent:
         type: string
-        minLength: 1
-      base_branch:
+        const: repository-publish
+      handoff_reference:
+        anyOf:
+          - type: string
+            minLength: 1
+          - type: "null"
+      run_id:
+        anyOf:
+          - type: string
+            minLength: 1
+          - type: "null"
+      status:
         type: string
-        minLength: 1
-      commit_sha:
+        enum:
+          - not_started
+          - invocation_requested
+          - running
+          - repository_publish_completed
+          - invocation_failed
+          - repository_publish_failed
+          - blocked
+      result_reference:
         anyOf:
           - type: string
-            pattern: "^[0-9a-f]{40}$"
+            minLength: 1
           - type: "null"
-      pushed:
-        type: boolean
-  pull_request:
-    type: object
-    additionalProperties: false
-    required:
-      - url
-      - number
-      - state
-    properties:
-      url:
+      next_action:
         anyOf:
-          - type: string
-            format: uri
-          - type: "null"
-      number:
-        anyOf:
-          - type: integer
-            minimum: 1
-          - type: "null"
-      state:
-        anyOf:
-          - type: string
-            enum:
-              - draft
-              - open
+          - type: object
+            additionalProperties: false
+            required:
+              - type
+              - target
+              - handoff_reference
+              - repository_publish_run_id
+              - automatic
+              - requires_human_confirmation
+              - on_invocation_failure
+              - deduplication_key
+            properties:
+              type:
+                const: invoke_agent
+              target:
+                const: repository-publish
+              handoff_reference:
+                type: string
+                minLength: 1
+              repository_publish_run_id:
+                type: string
+                pattern: "^rpr-[0-9a-f]{64}$"
+              automatic:
+                const: true
+              requires_human_confirmation:
+                const: false
+              on_invocation_failure:
+                const: invocation_failed
+              deduplication_key:
+                const: repository_publish_run_id
           - type: "null"
   blocking_issues:
     type: array
@@ -225,29 +244,9 @@ allOf:
   - if:
       properties:
         state:
-          const: pr_created
-    then:
-      properties:
-        git:
-          properties:
-            pushed:
-              const: true
-            commit_sha:
-              type: string
-        pull_request:
-          properties:
-            url:
-              type: string
-            number:
-              type: integer
-  - if:
-      properties:
-        state:
           enum:
-            - publishing
-            - branch_pushed
-            - creating_pull_request
-            - pr_created
+            - repository_publish_handoff_ready
+            - development_completed
     then:
       properties:
         release_gate:
@@ -260,6 +259,21 @@ allOf:
               const: passed
             raw_source_scan:
               const: passed
+        downstream:
+          properties:
+            handoff_reference:
+              type: string
+              minLength: 1
+            status:
+              enum:
+                - invocation_requested
+                - running
+                - repository_publish_completed
+                - invocation_failed
+                - repository_publish_failed
+                - blocked
+            next_action:
+              type: object
   - if:
       properties:
         state:

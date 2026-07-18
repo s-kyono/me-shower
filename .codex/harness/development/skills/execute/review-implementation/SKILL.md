@@ -63,6 +63,7 @@ Exactly one:
 ## Responsibilities
 
 - 実差分を確認する
+- `.codex/tools/repository_snapshot/build_snapshot.py`でReview対象Snapshotを生成し、implementation revisionとreviewed diff hashを記録する
 - 必要なテストや再現を独立して実行する
 - Design Lock、ADR、Acceptance Criteriaとの整合を確認する
 - source of truth、Evidence、Human Review、persistence、安全境界を確認する
@@ -104,6 +105,7 @@ Exactly one:
 - 差分または検証結果を確認できない
 - Review対象外のunrelated変更が混入している
 - 検証不能で判定根拠を作れない
+- 共通Snapshot Toolを実行できない、または`unexpected_files`が存在する
 
 ## State Patch Boundary
 

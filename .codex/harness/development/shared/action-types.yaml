@@ -203,10 +203,10 @@ workflow_events:
   - id: "release_gate_blocked"
     scopes: ["execute"]
 
-  - id: "branch_pushed"
+  - id: "repository_publish_handoff_ready"
     scopes: ["execute"]
 
-  - id: "pull_request_created"
+  - id: "development_completed"
     scopes: ["execute"]
 
   - id: "fix_attempt_limit_reached"

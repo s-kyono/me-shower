@@ -90,7 +90,11 @@ review_result: "{{ review_result }}"
 
 - Current Branch: {{ current_branch }}
 - Base Branch: {{ base_branch }}
-- Staged Files: {{ staged_files }}
+- Publish Candidate Files: {{ publish_candidate_files }}
+- Reviewed Diff Hash: {{ reviewed_diff_hash }}
+- Checked Diff Hash: {{ checked_diff_hash }}
+- Snapshot Manifest: {{ snapshot_manifest_path }}
+- Unexpected Files: {{ unexpected_files }}
 - Unrelated Changes: {{ unrelated_changes }}
 - Forbidden Paths Changed: {{ forbidden_paths_changed }}
 

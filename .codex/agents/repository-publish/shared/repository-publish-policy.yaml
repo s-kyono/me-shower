@@ -1,0 +1,55 @@
+schema_version: "1.0"
+
+handoff:
+  schema: .codex/harness/development/schemas/repository-publish-handoff.schema.yaml
+  target_agent: repository-publish
+  required_release_gate_status: passed
+  unresolved_blocking_issues_allowed: false
+
+snapshot:
+  tool: .codex/tools/repository_snapshot/build_snapshot.py
+  independent_hash_implementations_allowed: false
+  required_equalities:
+    - release_gate.reviewed_diff_hash == release_gate.checked_diff_hash
+    - current_snapshot_hash == release_gate.checked_diff_hash
+    - current_changed_files == publish_scope.expected_changed_files
+  unavailable_or_mismatch_result: blocked
+  unexpected_files_result: blocked
+
+idempotency:
+  key: repository_publish_run_id
+  tool: .codex/tools/repository_snapshot/build_snapshot.py
+  inputs: [repository.id, repository.base_branch, repository.working_branch, release_gate.checked_diff_hash, handoff_revision]
+  active_or_completed_action: return_existing_result_without_git_writes
+  invocation_failure_status: invocation_failed
+  registry_tool: .codex/agents/repository-publish/shared/run_registry.py
+  registry_root: .codex/runtime/repository-publish/runs
+  claim_method: atomic_directory_creation
+  claim_owner: repository-publish-agent-input-validation
+  router_action: check_only_do_not_claim
+
+branches:
+  base_branch: {must_be_explicit: true, direct_push_allowed: false}
+  working_branch: {must_be_explicit: true, force_push_allowed: false}
+
+staging:
+  scope_only: true
+  forbidden_commands: ["git add .", "git add -A", "git add --all"]
+  required_checks:
+    - git status --short
+    - git diff --cached --name-only
+    - git diff --cached --check
+    - git diff --cached --stat
+    - git diff --cached
+
+commit: {message_required: true, amend_allowed: false}
+push: {remote: origin, base_branch_push_allowed: false, force_push_allowed: false}
+pull_request:
+  write_tool: gh
+  merge_allowed: false
+  close_allowed: false
+  branch_delete_allowed: false
+authentication:
+  status_check_only_after_error: true
+  automatic_login_allowed: false
+  chain_with_git_commands: false

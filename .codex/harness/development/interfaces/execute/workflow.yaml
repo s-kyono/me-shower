@@ -2,9 +2,8 @@ schema_version: "1.0"
 interface: execute
 initial_state: execution_started
 terminal_states:
-  - pr_created
+  - development_completed
   - aborted
-  - blocked
 
 fix_cycle:
   owner: execute-interface
@@ -60,20 +59,18 @@ states:
       attempt_limit_reached: blocked
 
   release_gate_passed:
-    primary_skill: publish-branch
+    primary_skill: create-repository-publish-handoff
     transitions:
-      branch_pushed: branch_pushed
+      repository_publish_handoff_ready: repository_publish_handoff_ready
       blocked: blocked
       failed: blocked
 
-  branch_pushed:
-    primary_skill: create-pull-request
+  repository_publish_handoff_ready:
+    interface_action: complete_execution
     transitions:
-      pull_request_created: pr_created
-      blocked: blocked
-      failed: blocked
+      development_completed: development_completed
 
-  pr_created:
+  development_completed:
     primary_skill: null
     transitions: {}
 
@@ -97,8 +94,8 @@ policies:
   state_owner: execute-interface
   state_target: execution-state
   autonomous_within_design_lock: true
-  release_gate_required_before_publish: true
-  pull_request_auto_merge_allowed: false
+  release_gate_required_before_handoff: true
+  repository_publish_owned_by_execute: false
   fail_closed: true
 
 immediate_block_conditions:
@@ -113,4 +110,3 @@ immediate_block_conditions:
   - raw_source_detected
   - unrelated_changes_detected
   - git_conflict
-  - git_authentication_failed

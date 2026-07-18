@@ -1,0 +1,71 @@
+schema_version: "1.0"
+agent: repository-publish
+initial_state: input_validation
+
+states:
+  input_validation:
+    action: validate_handoff_repository_state_and_atomically_claim_run
+    required_guards:
+      - target_agent_matches
+      - invocation_request_matches
+      - run_id_matches
+      - release_gate_passed
+      - diff_hashes_match
+      - working_tree_unchanged
+      - implementation_revision_present
+      - base_branch_present
+      - working_branch_present
+      - branches_are_different
+      - publish_scope_present
+      - changed_files_match_scope
+      - no_scope_external_staging
+      - no_blocking_issues
+      - no_conflict
+    transitions:
+      valid: publish_branch
+      duplicate: deduplicated
+      invalid: blocked
+
+  publish_branch:
+    skill: skills/publish-branch/SKILL.md
+    transitions:
+      completed: create_pull_request
+      failed: failed
+      blocked: blocked
+
+  create_pull_request:
+    skill: skills/create-pull-request/SKILL.md
+    transitions:
+      completed: completed
+      failed: failed
+      blocked: blocked
+
+  completed: {terminal: true}
+  deduplicated: {terminal: true}
+  failed: {terminal: true}
+  blocked: {terminal: true}
+
+guards:
+  target_agent_matches: {path: target_agent, equals: repository-publish}
+  invocation_request_matches: {expression: "next_action.target == target_agent and next_action.type == invoke_agent"}
+  run_id_matches: {expression: "repository_publish_run_id == deterministic_run_id_from_shared_tool and next_action.repository_publish_run_id == repository_publish_run_id"}
+  release_gate_passed: {path: release_gate.status, equals: passed}
+  diff_hashes_match: {expression: release_gate.reviewed_diff_hash == release_gate.checked_diff_hash}
+  working_tree_unchanged: {expression: current_snapshot_hash == release_gate.checked_diff_hash}
+  implementation_revision_present: {path: release_gate.implementation_revision, minimum: 1}
+  base_branch_present: {path: repository.base_branch, not_empty: true}
+  working_branch_present: {path: repository.working_branch, not_empty: true}
+  branches_are_different: {expression: repository.base_branch != repository.working_branch}
+  publish_scope_present: {path: publish_scope.expected_changed_files, min_items: 1}
+  changed_files_match_scope: {expression: current_changed_files == publish_scope.expected_changed_files}
+  no_scope_external_staging: {expression: staged_files subset_of publish_scope.expected_changed_files}
+  no_blocking_issues: {path: blocking_issues, max_items: 0}
+  no_conflict: {expression: unmerged_files is empty}
+
+rules:
+  - Only one skill may run at a time.
+  - No Git write operation runs before every input_validation guard passes.
+  - Pull Request creation requires a successful push result.
+  - The agent never edits implementation files or Development Harness State.
+  - Duplicate invocation returns the existing run result without Git writes.
+  - Input validation atomically claims the run ID; an existing claim transitions to deduplicated.

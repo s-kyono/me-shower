@@ -51,6 +51,22 @@ prefix_rule(
 # Git branch
 # ============================================================
 
+# Development Review、Release Gate、handoff、Repository Publishで共用する
+# read-only Snapshot Tool。Hashの独自実装は許可しない。
+prefix_rule(
+    pattern = [
+        "python3",
+        ".codex/tools/repository_snapshot/build_snapshot.py",
+        ["build", "run-id"],
+    ],
+    decision = "allow",
+    justification = "共通Repository Snapshot Hashと決定的Publish Run IDの生成を許可する",
+    match = [
+        "python3 .codex/tools/repository_snapshot/build_snapshot.py build --repository-root . --include src/example.py --output /private/tmp/repository_snapshot.json",
+        "python3 .codex/tools/repository_snapshot/build_snapshot.py run-id --repository-id owner/repository --base-branch main --working-branch feat/example --checked-diff-hash aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --handoff-revision 1",
+    ],
+)
+
 # 起点ブランチはAGENTS.mdとユーザー指示で確定させる。
 # ルール側では作業ブランチ作成コマンドだけを許可する。
 prefix_rule(
