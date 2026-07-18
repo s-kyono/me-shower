@@ -1,0 +1,172 @@
+schema_version: "1.0"
+
+invariants:
+  - id: "career-knowledge-is-primary"
+    title: "Career Knowledge Is Primary"
+    description: |
+      Career Knowledgeを正本かつ主役として扱う。
+      Resume、Skills、Timeline、Agents、generated artifactsを正本化しない。
+    scopes: ["plan", "design", "execute", "review", "release"]
+    severity: "critical"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "source_of_truth_review"
+
+  - id: "evidence-before-claims"
+    title: "Evidence Before Claims"
+    description: |
+      Evidenceで裏付けられていないClaimをaccepted factとして扱わない。
+    scopes: ["plan", "design", "execute", "review"]
+    severity: "critical"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "claim_evidence_mapping"
+
+  - id: "human-review-before-persistence"
+    title: "Human Review Before Persistence"
+    description: |
+      Human Reviewを通過していないcandidateをCareer Knowledgeへ永続化しない。
+    scopes: ["design", "execute", "review", "release"]
+    severity: "critical"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "persistence_path_review"
+      - "negative_test"
+
+  - id: "ai-proposal-is-not-truth"
+    title: "AI Proposal Is Not Truth"
+    description: |
+      AIの提案、推奨、生成内容を人間が承認した事実として扱わない。
+    scopes: ["plan", "design", "execute", "review"]
+    severity: "critical"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "human_submission_check"
+
+  - id: "raw-source-is-not-persisted"
+    title: "Raw Source Is Not Persisted"
+    description: |
+      raw source全文を正本、fixture、ログ、例外、生成成果物へ永続化しない。
+    scopes: ["design", "execute", "review", "release"]
+    severity: "critical"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "persistence_scan"
+      - "diff_scan"
+
+  - id: "secrets-are-never-persisted"
+    title: "Secrets Are Never Persisted"
+    description: |
+      secret、credential、token、private keyなどを保存または公開しない。
+    scopes: ["execute", "review", "release"]
+    severity: "critical"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "secret_scan"
+
+  - id: "private-data-is-not-persisted"
+    title: "Private Data Is Not Persisted"
+    description: |
+      不要な個人情報、会話原文、非公開情報を保存または公開しない。
+    scopes: ["design", "execute", "review", "release"]
+    severity: "critical"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "privacy_scan"
+
+  - id: "generated-output-is-derived"
+    title: "Generated Output Is Derived"
+    description: |
+      生成成果物を正本として扱わず、Career Knowledgeから再生成可能な派生物とする。
+    scopes: ["plan", "design", "execute", "review"]
+    severity: "high"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "source_of_truth_review"
+
+  - id: "source-of-truth-boundary-is-explicit"
+    title: "Source of Truth Boundary Is Explicit"
+    description: |
+      source of truthの境界変更は、Plan、ADR、Design Lockを通じて明示する。
+    scopes: ["plan", "design", "execute", "review", "release"]
+    severity: "critical"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "source_of_truth_boundary_check"
+
+  - id: "state-mutation-is-interface-owned"
+    title: "State Mutation Is Interface Owned"
+    description: |
+      SkillはStateを直接変更せず、state patchをInterfaceへ返す。
+    scopes: ["plan", "execute"]
+    severity: "critical"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "state_write_boundary_check"
+
+  - id: "skills-do-not-call-skills"
+    title: "Skills Do Not Call Other Skills"
+    description: |
+      Skill間の直接呼び出しを禁止し、Interfaceが実行順序を管理する。
+    scopes: ["plan", "execute"]
+    severity: "high"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "skill_dependency_check"
+
+  - id: "human-submit-is-required"
+    title: "Human Submit Is Required"
+    description: |
+      Decision、Plan、Designは人間の明示的submitなしに確定しない。
+    scopes: ["plan", "design"]
+    severity: "critical"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "submission_state_check"
+
+  - id: "execution-stays-within-design-lock"
+    title: "Execution Stays Within Design Lock"
+    description: |
+      ExecuteはDesign LockのScope、境界、依存方向、禁止事項を越えない。
+    scopes: ["execute", "review", "release"]
+    severity: "critical"
+    violation_action: "require_human_decision"
+    accepted_risk_allowed: false
+    verification:
+      - "design_lock_diff_check"
+
+  - id: "release-gate-before-publish"
+    title: "Release Gate Before Publish"
+    description: |
+      Release Gateがpassedになるまでcommit、push、PR作成へ進まない。
+    scopes: ["execute", "release"]
+    severity: "critical"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "release_state_check"
+
+  - id: "validation-fails-closed"
+    title: "Validation Fails Closed"
+    description: |
+      検証不能、不明、状態不整合を成功として扱わない。
+    scopes: ["plan", "design", "execute", "review", "release"]
+    severity: "critical"
+    violation_action: "block"
+    accepted_risk_allowed: false
+    verification:
+      - "validation_result_check"
+
+extensions: {}

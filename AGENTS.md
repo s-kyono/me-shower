@@ -1,132 +1,156 @@
-# 職務経歴書運用エージェント指示
+# Repository Agent Instructions
 
-このワークスペースでは、`職務経歴書原本.xlsx` を壊さずに参照し、Markdownで経歴データ、判断根拠、応募先別の編集方針を管理する。
+`AGENTS.md`は、詳細なWorkflowや業務ルールを定義する文書ではない。
 
-エージェントの目的は、単に文章をよくすることではない。
+このファイルは、AIエージェントを適切なsource of truth、Harness、禁止領域、実行境界へ案内するためのリポジトリルーターとして扱う。
 
-原本との差分を管理し、根拠のある経験だけをCareer Knowledgeとして整理し、応募先に合わせて再構成することを目的とする。
+## Core Principles
 
-## 最優先原則
-
-* Career Knowledgeを主役とする。
-* Evidence before Claimsを守る。
-* AIが生成した文章、評価、推測を正本として扱わない。
-* Human Review before persistenceを守る。
-* raw source、credential、secret、private情報を保存しない。
-* Resume、Skills、Timeline、Agents、generated artifactsをsource of truthにしない。
-* 判断に迷う場合は、情報を補完せず「確認待ち」として扱う。
+- Career Knowledgeを主役かつsource of truthとして扱う。
+- Evidence before Claimsを守る。
+- Human Review before persistenceを守る。
+- AIが生成した提案、評価、推測、generated artifactsを正本として扱わない。
+- Resume、Skills、Timeline、Agents、generated artifactsをsource of truthにしない。
+- raw source、credential、secret、private情報を保存または公開しない。
+- 判断に必要な情報が不足する場合は、推測で補完せず、未確認または確認待ちとして扱う。
+- 検証不能、不明、状態不整合を成功として扱わない。
 
 ## Source of Truth
 
-* `職務経歴書原本.xlsx` は現行原本として扱い、勝手に上書きしない。
-* `docs/` 直下のConcept docsはcanonical docsとして扱う。
-* `docs/ja/` は人間向けのJapanese companion docsとして扱う。
-* AIエージェントは、明示指示がない限り `docs/ja/` をsource of truthとしない。
-* Conceptや設計判断が必要な場合は、まず `docs/` 直下のcanonical docsを参照する。
-* `docs/ja/` は、canonical docsの理解を補助する目的でのみ参照する。
-* generated outputや提出物を正本として扱わない。
+このリポジトリでは、対象領域ごとにsource of truthを分ける。
 
-## Career Knowledgeの管理
+### Product and Domain
 
-* 原本Excelから読み取った内容を、直接提出物へ流さない。
+- `docs/`直下のConcept docsを、プロダクト思想、ドメイン境界、アーキテクチャ方針のcanonical docsとして扱う。
+- Concept、Domain、Architectureに関する判断では、まず`docs/`直下のcanonical docsを参照する。
+- generated outputや提出物をsource of truthとして扱わない。
 
-* 原本から取得した情報は、まず次のSteering Sheetsへ整理する。
+### Harness Workflow
 
-  * `.codex/steering_sheets/career_profile.md`
-  * `.codex/steering_sheets/work_history.md`
+- `.codex/harness/`配下の各Harnessを、その用途におけるAgent Workflowのsource of truthとして扱う。
+- Harness内部のInterface、Skill、Schema、Template、Shared定義は、それぞれの責務における正本として扱う。
+- AgentやSkillを、原則としてHarnessを経由せず直接呼び出さない。
+- Harnessが存在しない用途では、既存Agentを恒久的な入口として登録しない。
 
-* 原本との差分、確認待ち、表現リスクは次に記録する。
+## Forbidden Context
 
-  * `.codex/steering_sheets/review_notes.md`
+- `docs/ja/`は人間専用の文書領域として扱う。
+- ユーザーから対象ファイルの明示的な参照指示がない限り、AIエージェントは`docs/ja/`を検索、一覧取得、読み込み、要約、比較、翻訳、根拠利用してはならない。
+- `docs/ja/`の内容をsource of truth、補助資料、翻訳元、判断根拠として使用してはならない。
+- `docs/ja/`の内容からcanonical docsや他の正本を暗黙に更新してはならない。
 
-* 職務要約、強み、所属履歴、スキルは `career_profile.md` で管理する。
+## Harness First
 
-* 案件ごとの職務経歴は `work_history.md` で管理する。
+ユーザーの依頼は、まず用途に対応するHarnessへルーティングする。
 
-* 編集方針や運用ルールは `resume_policy.md` を参照する。
+基本構造は次の通りとする。
 
-* 経験は次の要素に分解して管理する。
+```text
+AGENTS.md
+  ↓
+Harness
+  ↓
+Interface
+  ↓
+Skill
+```
 
-  * 案件
-  * 役割
-  * 技術
-  * 行動
-  * 成果
-  * 根拠
-  * 再現できる強み
+* Harnessは、Workflow、State、Human Gate、Invariant、Blocking条件を管理する。
+* Interfaceは、Harness内の進行とSkillの呼び出しを管理する。
+* Skillは、単一責務の処理と構造化されたInput / Outputを担当する。
+* SkillはStateを直接変更しない。
+* Skillは他Skillを直接呼び出さない。
+* 業務Workflowは、原則としてHarnessを入口とする。
+* `AGENTS.md`で明示的にルーティングされた独立Agentは、Harnessを経由せず直接呼び出してよい。
+* その他のAgentやSkillの直接呼び出しは、Harnessの開発、検証、デバッグ、またはユーザーが明示した一時手順に限る。
 
-## 事実と根拠
+## Harness Routing
 
-* 数値、期間、会社名、役割、使用技術は事実確認を優先する。
-* 根拠がない成果、評価、スキルを補完しない。
-* 推測から具体的な実績を作らない。
-* 経歴を誇張しない。
-* 未確認の内容は「確認待ち」として扱う。
-* AIによる提案は、人間の確認前に永続化された事実として扱わない。
+### Development Harness
 
-## 個人情報と機密情報
+開発Epicの計画、設計、実装、レビュー、Release Gateには、次を使用する。
 
-* 個人情報や機密情報を外部へ送る作業は、必ずユーザー確認を前提にする。
+* `.codex/harness/development/`
 
-* 次の情報は、提出用Markdown、PDF、Excel、ログ、レビュー出力へ載せない。
+入口は次のInterfaceとする。
 
-  * 氏名
-  * 住所
-  * 電話番号
-  * メールアドレス
-  * 生年月日
-  * 顔写真
-  * 学歴
-  * 資格
-  * credential
-  * secret
-  * private情報
+* Plan
+  `.codex/harness/development/interfaces/plan/SKILL.md`
+* Execute
+  `.codex/harness/development/interfaces/execute/SKILL.md`
 
-* raw sourceに含まれる機密情報を、そのまま保存または転記しない。
+詳細なWorkflow、Human Gate、State遷移、Skill責務、Review、Release Gateの規則は、Development Harness内の定義を参照する。
 
-## 応募先別の編集
+`AGENTS.md`側で同じ規則を再定義しない。
 
-* 応募先ごとに、強調する経験、削る経験、言い換える表現を設計する。
+### Output Harness
 
-* 提案は次の区分で整理する。
+職務経歴書、Skills、Timeline、PDF、応募先別成果物などの出力生成には、Output Harnessを使用する。
 
-  * 元の事実
-  * 根拠
-  * 編集意図
-  * 提出用文面
-  * 確認待ち
+Output Harnessが未実装の場合は、既存の出力関連Skillまたはユーザーが明示した一時手順を使用する。
 
-* 修正理由は、採用担当者と現場エンジニアの両方が理解できる粒度で簡潔に説明する。
+出力固有の業務ルールを`AGENTS.md`へ追加しない。
 
-* 応募先に合わせるために、事実そのものを変更してはならない。
+### Future Harnesses
 
-## 成果物と変更履歴
+用途ごとに専用Harnessを追加できる。
 
-* リリースとして見える変更、バージョン付きのプロジェクト履歴、プロジェクト向け変更は `CHANGELOG.md` に記録する。
-* 最終提出物を作成する前に、未確認事項を明示する。
-* 最終提出物を作成する前に、個人情報や機密情報が含まれていないことを確認する。
-* generated outputを正本として保存しない。
+例:
 
-## 自律実行の権限
+- Ingestion Harness
+- Knowledge Review Harness
+- Knowledge Persistence Harness
+- Export Harness
 
-実装およびGit操作を伴う場合は、次のルールに従う。
+新しい用途を追加する場合は、Agentを直接入口にせず、Harnessの責務、Input、Output、State、Human Gate、Invariantを定義する。
 
-- 今回のタスクスコープに含まれるワークスペース内のファイルは、承認なしで参照、作成、更新、移動、削除してよい。
-- 起点ブランチは、ユーザーから明示されたブランチを使用する。推測しない。
-- 指定された起点ブランチから作業ブランチを作成してよい。
-- ステージング対象は、今回のタスクスコープに含まれるファイルまたはディレクトリだけとする。
-- `git add .`、`git add -A`、`git add --all` は使用しない。
-- commit前に `git status --short` と `git diff --cached` を確認する。
-- commitには変更内容が分かるメッセージを必ず指定する。
-- 現在の作業ブランチを `origin` へpushしてよい。
-- 起点ブランチへの直接pushとforce pushは禁止する。
-- push後、指定された起点ブランチへのPull Requestを作成してよい。
-- Pull Requestのmerge、close、ブランチ削除は行わない。
-- GitHubへの書き込み操作は、GitHub App、Connector、MCPではなく `gh` CLIを使用する。
-- Pull Requestは `gh pr create --base <起点ブランチ> --head <作業ブランチ>` で作成する。
-- ローカルGit操作の前提として `gh auth status` を毎回実行しない。
-- `gh auth status` は、GitHub CLIで実際に認証エラーが発生した場合に限り、Git操作とは分けて実行する。
-- GitHub認証が無効な場合、`gh auth login` を自動実行せずユーザーへ報告する。
-- `gh auth status` と `git add`、`git commit`、`git push` を同一の `&&` コマンド列へ混在させない。
-- ステージング後の確認には `git status --short`、`git diff --cached --check`、`git diff --cached --stat` を使用してよい。
-- `.codex/rules/workflow.rules` に定義された実行権限と禁止事項に従う。
+## Boundary Changes
+
+* ProductまたはDomainのsource of truth境界を変更する場合は、PlanとADRを通じて明示する。
+* Harnessの責務、Workflow、State、Human Gate、Invariantの境界を変更する場合は、対象HarnessのPlanとDesign Lockを通じて明示する。
+* generated artifactsから正本を暗黙に更新しない。
+* 実行中にHarnessの責務またはDesign Lockを越える変更が必要になった場合は、処理を停止し、対応するPlanへ戻す。
+
+## Repository Security
+
+次の情報を、リポジトリ内のファイル、ログ、fixture、例外、generated artifacts、Git差分へ残さない。
+
+* credential
+* secret
+* API key
+* access token
+* password
+* private key
+* 実在する機密情報
+* 実在する個人情報を転用したfixture
+
+検出、確認、検証ができない場合はfail closedとし、commit、push、Pull Request作成を停止する。
+
+知識の取り込み、Review、永続化、raw source、個人情報の取扱規則は、対象HarnessのInvariant、Schema、Workflowをsource of truthとする。
+
+`AGENTS.md`側で、知識運用固有のSecurityおよびPrivacy規則を再定義しない。
+
+## Change and Release History
+
+* リリースとして見える変更、バージョン付きのプロジェクト履歴、利用者に影響する変更は`CHANGELOG.md`へ記録する。
+* `v1.0.0`未満では、Release Notesの作成を必須としない。
+* `v1.0.0`以降のVersion Releaseでは、`CHANGELOG.md`の更新に加えてRelease Notesを作成する。
+* Release Notesには、該当する範囲で次を記載する。
+
+  * 主要な変更
+  * 利用者への影響
+  * 破壊的変更
+  * Migration
+  * 既知の制約
+* 該当事項が存在しない項目を、推測や定型文で埋めない。
+* Release Notesの保存場所および公開手順は、対象HarnessのRelease Workflowをsource of truthとする。
+* Plan、ADR、Design Lock、Review、Release Gateは、対象HarnessのTemplateに従う。
+* generated artifactsを変更履歴、Release Notes、設計判断のsource of truthとして扱わない。
+
+## Repository Operations
+
+Git操作が必要な場合は、次のGit Operations Agentを参照する。
+
+- `.codex/agents/git-operations/AGENT.md`
+
+`AGENTS.md`側でGit操作の詳細を定義しない。

@@ -1,0 +1,204 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/shared/blocking-issue.schema.yaml"
+title: "Development Harness Blocking Issue"
+$defs:
+  blocking_issue:
+    type: object
+    additionalProperties: false
+    required:
+      - id
+      - code
+      - title
+      - category
+      - severity
+      - source
+      - description
+      - evidence
+      - violated_invariants
+      - affected_artifacts
+      - resolution
+      - status
+      - created_at
+      - resolved_at
+      - extensions
+    properties:
+      id:
+        type: string
+        pattern: "^BI-[0-9]{4,}$"
+      code:
+        type: string
+        pattern: "^[A-Z][A-Z0-9_]*$"
+      title:
+        type: string
+        minLength: 1
+      category:
+        type: string
+        enum:
+          - boundary
+          - invariant
+          - design_lock
+          - state
+          - context
+          - security
+          - privacy
+          - raw_source
+          - validation
+          - test
+          - git
+          - workflow
+          - human_decision
+      severity:
+        type: string
+        enum:
+          - critical
+          - high
+      source:
+        type: object
+        additionalProperties: false
+        required:
+          - interface
+          - skill_id
+          - phase
+        properties:
+          interface:
+            type: string
+            enum:
+              - plan
+              - execute
+              - shared
+          skill_id:
+            anyOf:
+              - type: string
+              - type: "null"
+          phase:
+            type: string
+            minLength: 1
+      description:
+        type: string
+        minLength: 1
+      evidence:
+        type: object
+        additionalProperties: false
+        required:
+          - references
+          - observed
+          - expected
+        properties:
+          references:
+            type: array
+            items:
+              type: string
+          observed:
+            type: array
+            minItems: 1
+            items:
+              type: string
+          expected:
+            type: array
+            items:
+              type: string
+      violated_invariants:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+      affected_artifacts:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+      resolution:
+        type: object
+        additionalProperties: false
+        required:
+          - required_action
+          - responsible_role
+          - resumable
+          - resume_condition
+        properties:
+          required_action:
+            type: string
+            enum:
+              - return_to_plan
+              - request_human_decision
+              - repair_state
+              - remove_sensitive_data
+              - rerun_validation
+              - fix_implementation
+              - resolve_git_conflict
+              - reauthenticate
+              - abort_execution
+          responsible_role:
+            type: string
+            enum:
+              - human
+              - plan_interface
+              - execute_interface
+              - implementer
+              - repository_operator
+          resumable:
+            type: boolean
+          resume_condition:
+            type: string
+            minLength: 1
+      status:
+        type: string
+        enum:
+          - open
+          - resolving
+          - resolved
+          - superseded
+      created_at:
+        type: string
+        format: date-time
+      resolved_at:
+        anyOf:
+          - type: string
+            format: date-time
+          - type: "null"
+      extensions:
+        type: object
+    allOf:
+      - if:
+          properties:
+            status:
+              const: open
+        then:
+          properties:
+            resolved_at:
+              type: "null"
+      - if:
+          properties:
+            status:
+              const: resolved
+        then:
+          properties:
+            resolved_at:
+              type: string
+              format: date-time
+      - if:
+          properties:
+            category:
+              const: invariant
+        then:
+          properties:
+            violated_invariants:
+              minItems: 1
+      - if:
+          properties:
+            resolution:
+              properties:
+                responsible_role:
+                  const: human
+        then:
+          properties:
+            resolution:
+              properties:
+                required_action:
+                  enum:
+                    - request_human_decision
+                    - return_to_plan
+                    - abort_execution
+
+allOf:
+  - $ref: "#/$defs/blocking_issue"

@@ -1,0 +1,68 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/adr.schema.yaml"
+title: "Architecture Decision Record Metadata"
+type: object
+additionalProperties: false
+required:
+  - adr_id
+  - title
+  - status
+  - date
+  - epic
+  - supersedes
+  - related_adrs
+  - related_issues
+properties:
+  adr_id:
+    type: string
+    pattern: "^ADR-[0-9]{4}$"
+  title:
+    type: string
+    minLength: 1
+  status:
+    type: string
+    enum:
+      - proposed
+      - accepted
+      - rejected
+      - superseded
+      - deprecated
+  date:
+    type: string
+    format: date
+  epic:
+    type: string
+    minLength: 1
+  supersedes:
+    type: array
+    uniqueItems: true
+    items:
+      type: string
+      pattern: "^ADR-[0-9]{4}$"
+  related_adrs:
+    type: array
+    uniqueItems: true
+    items:
+      type: string
+      pattern: "^ADR-[0-9]{4}$"
+  related_issues:
+    type: array
+    uniqueItems: true
+    items:
+      type: string
+$defs:
+  required_markdown_sections:
+    type: array
+    const:
+      - Context
+      - Decision
+      - Decision Drivers
+      - Considered Options
+      - Selected Option
+      - Rationale
+      - Trade-offs
+      - Consequences
+      - Rejected Alternatives
+      - Accepted Risks
+      - Revisit Triggers
+      - References

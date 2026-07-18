@@ -1,0 +1,270 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/execution-state.schema.yaml"
+title: "Development Harness Execution State"
+type: object
+additionalProperties: false
+required:
+  - schema_version
+  - epic
+  - state
+  - revision
+  - design_lock
+  - execution
+  - review
+  - release_gate
+  - git
+  - pull_request
+  - blocking_issues
+  - warnings
+  - extensions
+properties:
+  schema_version:
+    type: string
+    const: "1.0"
+  epic:
+    type: string
+    minLength: 1
+  state:
+    type: string
+    enum:
+      - execution_started
+      - execution_context_ready
+      - implementing
+      - implementation_completed
+      - reviewing
+      - changes_required
+      - fixing
+      - review_accepted
+      - release_gate_running
+      - release_gate_failed
+      - release_gate_passed
+      - publishing
+      - branch_pushed
+      - creating_pull_request
+      - pr_created
+      - blocked
+      - aborted
+  revision:
+    type: integer
+    minimum: 0
+  design_lock:
+    type: object
+    additionalProperties: false
+    required:
+      - status
+      - path
+      - revision
+    properties:
+      status:
+        type: string
+        enum:
+          - aligned
+          - deviated
+          - invalidated
+          - unknown
+      path:
+        type: string
+        minLength: 1
+      revision:
+        type: integer
+        minimum: 1
+  execution:
+    type: object
+    additionalProperties: false
+    required:
+      - current_skill
+      - changed_files
+      - fix_cycle
+    properties:
+      current_skill:
+        anyOf:
+          - type: string
+          - type: "null"
+      changed_files:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+      fix_cycle:
+        type: object
+        additionalProperties: false
+        required:
+          - attempt_count
+          - maximum_attempts
+        properties:
+          attempt_count:
+            type: integer
+            minimum: 0
+            maximum: 5
+          maximum_attempts:
+            type: integer
+            const: 5
+  review:
+    type: object
+    additionalProperties: false
+    required:
+      - latest_result
+      - latest_artifact
+    properties:
+      latest_result:
+        anyOf:
+          - type: string
+            enum:
+              - accepted
+              - changes_required
+              - blocked
+          - type: "null"
+      latest_artifact:
+        anyOf:
+          - type: string
+          - type: "null"
+  release_gate:
+    type: object
+    additionalProperties: false
+    required:
+      - result
+      - artifact
+      - secret_scan
+      - privacy_scan
+      - raw_source_scan
+    properties:
+      result:
+        anyOf:
+          - type: string
+            enum:
+              - passed
+              - failed
+              - blocked
+          - type: "null"
+      artifact:
+        anyOf:
+          - type: string
+          - type: "null"
+      secret_scan:
+        anyOf:
+          - type: string
+            enum:
+              - passed
+              - failed
+              - blocked
+          - type: "null"
+      privacy_scan:
+        anyOf:
+          - type: string
+            enum:
+              - passed
+              - failed
+              - blocked
+          - type: "null"
+      raw_source_scan:
+        anyOf:
+          - type: string
+            enum:
+              - passed
+              - failed
+              - blocked
+          - type: "null"
+  git:
+    type: object
+    additionalProperties: false
+    required:
+      - branch
+      - base_branch
+      - commit_sha
+      - pushed
+    properties:
+      branch:
+        type: string
+        minLength: 1
+      base_branch:
+        type: string
+        minLength: 1
+      commit_sha:
+        anyOf:
+          - type: string
+            pattern: "^[0-9a-f]{40}$"
+          - type: "null"
+      pushed:
+        type: boolean
+  pull_request:
+    type: object
+    additionalProperties: false
+    required:
+      - url
+      - number
+      - state
+    properties:
+      url:
+        anyOf:
+          - type: string
+            format: uri
+          - type: "null"
+      number:
+        anyOf:
+          - type: integer
+            minimum: 1
+          - type: "null"
+      state:
+        anyOf:
+          - type: string
+            enum:
+              - draft
+              - open
+          - type: "null"
+  blocking_issues:
+    type: array
+    items:
+      $ref: "../shared/blocking-issue.schema.yaml#/$defs/blocking_issue"
+  warnings:
+    type: array
+    items:
+      type: object
+  extensions:
+    type: object
+allOf:
+  - if:
+      properties:
+        state:
+          const: pr_created
+    then:
+      properties:
+        git:
+          properties:
+            pushed:
+              const: true
+            commit_sha:
+              type: string
+        pull_request:
+          properties:
+            url:
+              type: string
+            number:
+              type: integer
+  - if:
+      properties:
+        state:
+          enum:
+            - publishing
+            - branch_pushed
+            - creating_pull_request
+            - pr_created
+    then:
+      properties:
+        release_gate:
+          properties:
+            result:
+              const: passed
+            secret_scan:
+              const: passed
+            privacy_scan:
+              const: passed
+            raw_source_scan:
+              const: passed
+  - if:
+      properties:
+        state:
+          const: blocked
+    then:
+      properties:
+        blocking_issues:
+          minItems: 1

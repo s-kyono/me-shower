@@ -1,0 +1,204 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/decision.schema.yaml"
+title: "Development Harness Decision"
+type: object
+additionalProperties: false
+required:
+  - id
+  - title
+  - status
+  - context
+  - decision_drivers
+  - options
+  - selected_option_id
+  - recommendation
+  - human_input
+  - submission
+  - rationale
+  - reopen
+  - review
+  - extensions
+properties:
+  id:
+    type: string
+    pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+  title:
+    type: string
+    minLength: 1
+  status:
+    type: string
+    enum:
+      - discovered
+      - candidate
+      - option_selected
+      - provisional_accepted
+      - reopened
+      - deferred
+      - superseded
+  context:
+    type: string
+  decision_drivers:
+    type: array
+    items:
+      type: string
+  options:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - summary
+        - strengths
+        - weaknesses
+        - risks
+        - status
+      properties:
+        id:
+          type: string
+          pattern: "^option_[1-9][0-9]*$"
+        title:
+          type: string
+          minLength: 1
+        summary:
+          type: string
+        strengths:
+          type: array
+          items:
+            type: string
+        weaknesses:
+          type: array
+          items:
+            type: string
+        risks:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum:
+            - considered
+            - selected
+            - rejected
+            - withdrawn
+  selected_option_id:
+    anyOf:
+      - type: string
+        pattern: "^option_[1-9][0-9]*$"
+      - type: "null"
+  recommendation:
+    type: object
+    additionalProperties: false
+    required:
+      - option_id
+      - rationale
+    properties:
+      option_id:
+        anyOf:
+          - type: string
+            pattern: "^option_[1-9][0-9]*$"
+          - type: "null"
+      rationale:
+        anyOf:
+          - type: string
+          - type: "null"
+  human_input:
+    type: object
+    additionalProperties: false
+    required:
+      - type
+      - content
+    properties:
+      type:
+        anyOf:
+          - type: string
+            enum:
+              - select_option
+              - question
+              - free_text
+              - request_reproposal
+              - submit_decision
+              - reopen_decision
+          - type: "null"
+      content:
+        anyOf:
+          - type: string
+          - type: "null"
+  submission:
+    type: object
+    additionalProperties: false
+    required:
+      - submitted
+      - submitted_at
+    properties:
+      submitted:
+        type: boolean
+      submitted_at:
+        anyOf:
+          - type: string
+            format: date-time
+          - type: "null"
+  rationale:
+    anyOf:
+      - type: string
+      - type: "null"
+  reopen:
+    type: object
+    additionalProperties: false
+    required:
+      - count
+      - reason
+    properties:
+      count:
+        type: integer
+        minimum: 0
+      reason:
+        anyOf:
+          - type: string
+          - type: "null"
+  review:
+    type: object
+    additionalProperties: false
+    required:
+      - requires_revisit
+      - reasons
+    properties:
+      requires_revisit:
+        type: boolean
+      reasons:
+        type: array
+        items:
+          type: string
+  extensions:
+    type: object
+    additionalProperties: false
+allOf:
+  - if:
+      properties:
+        status:
+          const: provisional_accepted
+    then:
+      properties:
+        selected_option_id:
+          type: string
+        submission:
+          properties:
+            submitted:
+              const: true
+            submitted_at:
+              type: string
+              format: date-time
+        rationale:
+          type: string
+          minLength: 1
+  - if:
+      properties:
+        submission:
+          properties:
+            submitted:
+              const: true
+    then:
+      properties:
+        status:
+          const: provisional_accepted

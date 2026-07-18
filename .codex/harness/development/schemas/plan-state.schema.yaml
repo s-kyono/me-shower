@@ -1,0 +1,231 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/plan-state.schema.yaml"
+title: "Development Harness Plan State"
+type: object
+additionalProperties: false
+required:
+  - schema_version
+  - plan
+  - workflow
+  - decisions
+  - open_questions
+  - adr_candidates
+  - artifacts
+  - submission
+  - blocking_issues
+  - notes
+  - extensions
+properties:
+  schema_version:
+    type: string
+    const: "1.0"
+  plan:
+    type: object
+    additionalProperties: false
+    required:
+      - id
+      - title
+      - status
+      - revision
+    properties:
+      id:
+        type: string
+        minLength: 1
+      title:
+        type: string
+        minLength: 1
+      status:
+        type: string
+        enum:
+          - draft
+          - planning
+          - plan_submitted
+          - designing
+          - design_locked
+          - blocked
+          - completed
+      revision:
+        type: integer
+        minimum: 0
+  workflow:
+    type: object
+    additionalProperties: false
+    required:
+      - phase
+      - current_decision_id
+      - human_action_required
+      - allowed_human_actions
+    properties:
+      phase:
+        type: string
+        enum:
+          - context_inspection
+          - decision_discovery
+          - decision_loop
+          - plan_assembly
+          - plan_review
+          - plan_revision
+          - implementation_design
+          - adr_confirmation
+          - design_lock
+          - completed
+          - blocked
+      current_decision_id:
+        anyOf:
+          - type: string
+          - type: "null"
+      human_action_required:
+        type: boolean
+      allowed_human_actions:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+          enum:
+            - select_option
+            - question
+            - free_text
+            - request_reproposal
+            - submit_decision
+            - reopen_decision
+            - submit_plan
+            - submit_design
+  decisions:
+    type: array
+    items:
+      $ref: "./decision.schema.yaml"
+  open_questions:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - decision_id
+        - question
+        - status
+      properties:
+        id:
+          type: string
+          minLength: 1
+        decision_id:
+          anyOf:
+            - type: string
+            - type: "null"
+        question:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum:
+            - open
+            - answered
+            - dismissed
+            - deferred
+  adr_candidates:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - decision_id
+        - status
+        - reason
+      properties:
+        decision_id:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum:
+            - candidate
+            - approved_for_formalization
+            - rejected
+            - formalized
+        reason:
+          type: string
+  artifacts:
+    type: object
+    additionalProperties: false
+    required:
+      - plan_path
+      - design_lock_path
+      - adr_paths
+    properties:
+      plan_path:
+        anyOf:
+          - type: string
+          - type: "null"
+      design_lock_path:
+        anyOf:
+          - type: string
+          - type: "null"
+      adr_paths:
+        type: array
+        items:
+          type: string
+  submission:
+    type: object
+    additionalProperties: false
+    required:
+      - decisions_completed
+      - plan_submitted
+      - design_submitted
+    properties:
+      decisions_completed:
+        type: boolean
+      plan_submitted:
+        type: boolean
+      design_submitted:
+        type: boolean
+  blocking_issues:
+    type: array
+    items:
+      $ref: "../shared/blocking-issue.schema.yaml#/$defs/blocking_issue"
+  notes:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - content
+      properties:
+        id:
+          type: string
+          minLength: 1
+        content:
+          type: string
+  extensions:
+    type: object
+allOf:
+  - if:
+      properties:
+        workflow:
+          properties:
+            human_action_required:
+              const: true
+    then:
+      properties:
+        workflow:
+          properties:
+            allowed_human_actions:
+              minItems: 1
+  - if:
+      properties:
+        submission:
+          properties:
+            design_submitted:
+              const: true
+    then:
+      properties:
+        submission:
+          properties:
+            plan_submitted:
+              const: true
+        plan:
+          properties:
+            status:
+              enum:
+                - design_locked
+                - completed

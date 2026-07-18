@@ -1,0 +1,201 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/shared/state-patch.schema.yaml"
+title: "Development Harness State Patch"
+type: object
+additionalProperties: false
+required:
+  - schema_version
+  - patch
+properties:
+  schema_version:
+    type: string
+    const: "1.0"
+  patch:
+    type: object
+    additionalProperties: false
+    required:
+      - id
+      - target
+      - expected
+      - source
+      - intent
+      - operations
+      - postconditions
+      - requested_transition
+      - risk
+      - extensions
+    properties:
+      id:
+        type: string
+        pattern: "^SP-[0-9]{4,}$"
+      target:
+        type: string
+        enum:
+          - plan-state
+          - execution-state
+      expected:
+        type: object
+        additionalProperties: false
+        required:
+          - revision
+          - workflow_state
+        properties:
+          revision:
+            type: integer
+            minimum: 0
+          workflow_state:
+            type: string
+            minLength: 1
+      source:
+        type: object
+        additionalProperties: false
+        required:
+          - interface
+          - skill_id
+        properties:
+          interface:
+            type: string
+            enum:
+              - plan
+              - execute
+          skill_id:
+            type: string
+            minLength: 1
+      intent:
+        type: string
+        minLength: 1
+      operations:
+        type: array
+        minItems: 1
+        items:
+          type: object
+          additionalProperties: false
+          required:
+            - op
+            - path
+          properties:
+            op:
+              type: string
+              enum:
+                - add
+                - replace
+                - remove
+            path:
+              type: string
+              pattern: "^/"
+            value: {}
+          allOf:
+            - if:
+                properties:
+                  op:
+                    enum:
+                      - add
+                      - replace
+              then:
+                required:
+                  - value
+            - if:
+                properties:
+                  op:
+                    const: remove
+              then:
+                not:
+                  required:
+                    - value
+      postconditions:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required:
+            - type
+            - path
+          properties:
+            type:
+              type: string
+              enum:
+                - equals
+                - not_equals
+                - exists
+                - not_exists
+                - not_null
+                - empty
+                - not_empty
+            path:
+              type: string
+              pattern: "^/"
+            value: {}
+      requested_transition:
+        anyOf:
+          - type: object
+            additionalProperties: false
+            required:
+              - from
+              - to
+            properties:
+              from:
+                type: string
+                minLength: 1
+              to:
+                type: string
+                minLength: 1
+          - type: "null"
+      risk:
+        type: object
+        additionalProperties: false
+        required:
+          - level
+          - touches_human_approval
+          - touches_design_lock
+          - touches_source_of_truth
+          - touches_persistence_boundary
+          - touches_security_boundary
+        properties:
+          level:
+            type: string
+            enum:
+              - low
+              - medium
+              - high
+              - critical
+          touches_human_approval:
+            type: boolean
+          touches_design_lock:
+            type: boolean
+          touches_source_of_truth:
+            type: boolean
+          touches_persistence_boundary:
+            type: boolean
+          touches_security_boundary:
+            type: boolean
+      extensions:
+        type: object
+allOf:
+  - if:
+      properties:
+        patch:
+          properties:
+            source:
+              properties:
+                interface:
+                  const: plan
+    then:
+      properties:
+        patch:
+          properties:
+            target:
+              const: plan-state
+  - if:
+      properties:
+        patch:
+          properties:
+            source:
+              properties:
+                interface:
+                  const: execute
+    then:
+      properties:
+        patch:
+          properties:
+            target:
+              const: execution-state

@@ -1,0 +1,254 @@
+schema_version: "1.0"
+
+human_actions:
+  - id: "select_option"
+    title: "Select Option"
+    description: |
+      現在のDecisionに対してOptionを選択する。
+      この操作だけではDecisionを確定しない。
+    scopes: ["plan"]
+    allowed_phases: ["decision_loop"]
+    requires_payload: true
+    payload_type: "option_selection"
+    advances_workflow: false
+    requires_human: true
+
+  - id: "question"
+    title: "Ask Question"
+    description: |
+      現在のDecisionやPlanについて質問する。
+    scopes: ["plan"]
+    allowed_phases:
+      - "decision_loop"
+      - "plan_review"
+      - "implementation_design"
+    requires_payload: true
+    payload_type: "text"
+    advances_workflow: false
+    requires_human: true
+
+  - id: "free_text"
+    title: "Provide Free Text"
+    description: |
+      人間の判断、制約、補足を自由記述で追加する。
+    scopes: ["plan"]
+    allowed_phases:
+      - "decision_loop"
+      - "plan_review"
+      - "implementation_design"
+    requires_payload: true
+    payload_type: "text"
+    advances_workflow: false
+    requires_human: true
+
+  - id: "request_reproposal"
+    title: "Request Reproposal"
+    description: |
+      現在のOption群を却下し、再提案を求める。
+    scopes: ["plan"]
+    allowed_phases: ["decision_loop"]
+    requires_payload: false
+    payload_type: null
+    advances_workflow: false
+    requires_human: true
+
+  - id: "submit_decision"
+    title: "Submit Decision"
+    description: |
+      選択済みDecisionを人間の判断として暫定確定する。
+    scopes: ["plan"]
+    allowed_phases: ["decision_loop"]
+    requires_payload: false
+    payload_type: null
+    advances_workflow: true
+    requires_human: true
+
+  - id: "reopen_decision"
+    title: "Reopen Decision"
+    description: |
+      暫定確定済みDecisionを再検討状態へ戻す。
+    scopes: ["plan"]
+    allowed_phases:
+      - "decision_loop"
+      - "plan_review"
+      - "implementation_design"
+    requires_payload: true
+    payload_type: "reopen_request"
+    advances_workflow: true
+    requires_human: true
+
+  - id: "submit_plan"
+    title: "Submit Plan"
+    description: |
+      Plan全体を承認し、Implementation Designへ進める。
+    scopes: ["plan"]
+    allowed_phases: ["plan_review"]
+    requires_payload: false
+    payload_type: null
+    advances_workflow: true
+    requires_human: true
+
+  - id: "submit_design"
+    title: "Submit Design"
+    description: |
+      Implementation Designを承認し、Design Lockを確定する。
+    scopes: ["plan"]
+    allowed_phases: ["design_lock"]
+    requires_payload: false
+    payload_type: null
+    advances_workflow: true
+    requires_human: true
+
+  - id: "return_to_plan"
+    title: "Return to Plan"
+    description: |
+      Executeを停止し、Plan Interfaceへ戻る。
+    scopes: ["execute"]
+    allowed_phases: ["blocked"]
+    requires_payload: true
+    payload_type: "return_to_plan_request"
+    advances_workflow: true
+    requires_human: true
+
+  - id: "abort_execution"
+    title: "Abort Execution"
+    description: |
+      現在のExecutionを終了する。
+    scopes: ["execute"]
+    allowed_phases:
+      - "blocked"
+      - "release_gate_failed"
+    requires_payload: false
+    payload_type: null
+    advances_workflow: true
+    requires_human: true
+
+interface_actions:
+  - id: "invoke_skill"
+    title: "Invoke Skill"
+    scopes: ["plan", "execute"]
+    requires_payload: true
+    payload_type: "skill_invocation"
+
+  - id: "apply_state_patch"
+    title: "Apply State Patch"
+    scopes: ["plan", "execute"]
+    requires_payload: true
+    payload_type: "state_patch"
+
+  - id: "advance_phase"
+    title: "Advance Workflow Phase"
+    scopes: ["plan", "execute"]
+    requires_payload: true
+    payload_type: "workflow_transition"
+
+  - id: "record_blocking_issue"
+    title: "Record Blocking Issue"
+    scopes: ["plan", "execute"]
+    requires_payload: true
+    payload_type: "blocking_issue"
+
+  - id: "resume_workflow"
+    title: "Resume Workflow"
+    scopes: ["plan", "execute"]
+    requires_payload: true
+    payload_type: "resume_request"
+
+  - id: "invalidate_design_lock"
+    title: "Invalidate Design Lock"
+    scopes: ["plan"]
+    requires_payload: true
+    payload_type: "design_lock_invalidation"
+
+  - id: "increment_fix_attempt"
+    title: "Increment Fix Attempt"
+    description: |
+      実装側の修正・再提出回数を1増やす。
+      Reviewerはこの回数を管理しない。
+    scopes: ["execute"]
+    requires_payload: false
+    payload_type: null
+
+workflow_events:
+  - id: "decision_discovered"
+    scopes: ["plan"]
+
+  - id: "decision_submitted"
+    scopes: ["plan"]
+
+  - id: "plan_accepted"
+    scopes: ["plan"]
+
+  - id: "design_locked"
+    scopes: ["plan"]
+
+  - id: "implementation_completed"
+    scopes: ["execute"]
+
+  - id: "review_accepted"
+    scopes: ["execute"]
+
+  - id: "review_changes_required"
+    scopes: ["execute"]
+
+  - id: "review_blocked"
+    scopes: ["execute"]
+
+  - id: "release_gate_passed"
+    scopes: ["execute"]
+
+  - id: "release_gate_failed"
+    scopes: ["execute"]
+
+  - id: "release_gate_blocked"
+    scopes: ["execute"]
+
+  - id: "branch_pushed"
+    scopes: ["execute"]
+
+  - id: "pull_request_created"
+    scopes: ["execute"]
+
+  - id: "fix_attempt_limit_reached"
+    scopes: ["execute"]
+
+payload_types:
+  option_selection:
+    required_fields:
+      - "decision_id"
+      - "option_id"
+
+  text:
+    required_fields:
+      - "content"
+
+  reopen_request:
+    required_fields:
+      - "decision_id"
+      - "reason"
+
+  return_to_plan_request:
+    required_fields:
+      - "blocking_issue_id"
+      - "reason"
+
+  skill_invocation:
+    required_fields:
+      - "skill_id"
+      - "input"
+
+  workflow_transition:
+    required_fields:
+      - "from"
+      - "to"
+
+  resume_request:
+    required_fields:
+      - "blocking_issue_id"
+
+  design_lock_invalidation:
+    required_fields:
+      - "reason"
+      - "affected_revision"
+
+extensions: {}

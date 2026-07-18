@@ -1,0 +1,115 @@
+schema_version: "1.0"
+interface: plan
+initial_phase: context_inspection
+terminal_phases:
+  - completed
+  - blocked
+
+phases:
+  context_inspection:
+    primary_skill: inspect-context
+    allowed_human_actions: []
+    transitions:
+      context_ready: decision_discovery
+      blocked: blocked
+
+  decision_discovery:
+    primary_skill: discover-decisions
+    allowed_human_actions: []
+    transitions:
+      decisions_discovered: decision_loop
+      no_decisions_required: plan_assembly
+      blocked: blocked
+
+  decision_loop:
+    primary_skills:
+      - propose-options
+      - submit-decision
+    allowed_human_actions:
+      - select_option
+      - question
+      - free_text
+      - request_reproposal
+      - submit_decision
+      - reopen_decision
+    transitions:
+      decision_pending: decision_loop
+      decision_submitted: decision_loop
+      all_decisions_submitted: plan_assembly
+      blocked: blocked
+
+  plan_assembly:
+    primary_skill: assemble-plan
+    allowed_human_actions: []
+    transitions:
+      plan_draft_ready: plan_review
+      blocked: blocked
+
+  plan_review:
+    primary_skill: review-plan
+    allowed_human_actions:
+      - question
+      - free_text
+      - reopen_decision
+      - submit_plan
+    transitions:
+      clarification_required: decision_loop
+      revision_required: plan_assembly
+      conflict_detected: blocked
+      plan_submitted: adr_confirmation
+      blocked: blocked
+
+  adr_confirmation:
+    primary_skill: build-adr-candidates
+    allowed_human_actions:
+      - question
+      - free_text
+    transitions:
+      adr_candidates_ready: implementation_design
+      blocked: blocked
+
+  implementation_design:
+    primary_skill: design-implementation
+    allowed_human_actions:
+      - question
+      - free_text
+      - reopen_decision
+    transitions:
+      design_ready: design_lock
+      plan_revision_required: plan_review
+      blocked: blocked
+
+  design_lock:
+    primary_skill: lock-design
+    allowed_human_actions:
+      - question
+      - free_text
+      - submit_design
+    transitions:
+      design_submitted: completed
+      revision_required: implementation_design
+      blocked: blocked
+
+  completed:
+    primary_skill: null
+    allowed_human_actions: []
+    transitions: {}
+
+  blocked:
+    primary_skill: null
+    allowed_human_actions:
+      - question
+      - free_text
+    transitions:
+      issue_resolved: context_inspection
+
+policies:
+  one_primary_skill_per_interaction: true
+  skill_to_skill_calls_allowed: false
+  state_owner: plan-interface
+  state_target: plan-state
+  explicit_human_submit_required:
+    - decision
+    - plan
+    - design
+  fail_closed: true

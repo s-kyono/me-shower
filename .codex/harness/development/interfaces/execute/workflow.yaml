@@ -1,0 +1,116 @@
+schema_version: "1.0"
+interface: execute
+initial_state: execution_started
+terminal_states:
+  - pr_created
+  - aborted
+  - blocked
+
+fix_cycle:
+  owner: execute-interface
+  counter: fix_attempt_count
+  maximum_attempts: 5
+  reviewer_owns_counter: false
+
+states:
+  execution_started:
+    primary_skill: inspect-execution-context
+    transitions:
+      context_ready: execution_context_ready
+      blocked: blocked
+
+  execution_context_ready:
+    primary_skill: implement
+    transitions:
+      implementation_completed: implementation_completed
+      blocking_deviation: blocked
+      failed: blocked
+
+  implementation_completed:
+    primary_skill: review-implementation
+    transitions:
+      review_accepted: review_accepted
+      review_changes_required: changes_required
+      review_blocked: blocked
+
+  changes_required:
+    interface_action: increment_fix_attempt
+    transitions:
+      attempts_available: fixing
+      attempt_limit_reached: blocked
+
+  fixing:
+    primary_skill: apply-scope-fix
+    transitions:
+      fix_completed: implementation_completed
+      blocking_deviation: blocked
+      failed: blocked
+
+  review_accepted:
+    primary_skill: run-release-gate
+    transitions:
+      release_gate_passed: release_gate_passed
+      release_gate_failed: release_gate_failed
+      release_gate_blocked: blocked
+
+  release_gate_failed:
+    interface_action: increment_fix_attempt
+    transitions:
+      attempts_available: fixing
+      attempt_limit_reached: blocked
+
+  release_gate_passed:
+    primary_skill: publish-branch
+    transitions:
+      branch_pushed: branch_pushed
+      blocked: blocked
+      failed: blocked
+
+  branch_pushed:
+    primary_skill: create-pull-request
+    transitions:
+      pull_request_created: pr_created
+      blocked: blocked
+      failed: blocked
+
+  pr_created:
+    primary_skill: null
+    transitions: {}
+
+  blocked:
+    primary_skill: null
+    allowed_human_actions:
+      - return_to_plan
+      - abort_execution
+    transitions:
+      return_to_plan: aborted
+      abort_execution: aborted
+      issue_resolved: execution_started
+
+  aborted:
+    primary_skill: null
+    transitions: {}
+
+policies:
+  one_primary_skill_per_interaction: true
+  skill_to_skill_calls_allowed: false
+  state_owner: execute-interface
+  state_target: execution-state
+  autonomous_within_design_lock: true
+  release_gate_required_before_publish: true
+  pull_request_auto_merge_allowed: false
+  fail_closed: true
+
+immediate_block_conditions:
+  - invariant_violation
+  - design_lock_blocking_deviation
+  - source_of_truth_boundary_change
+  - persistence_boundary_change
+  - human_review_boundary_change
+  - safety_gate_boundary_change
+  - secret_detected
+  - private_data_detected
+  - raw_source_detected
+  - unrelated_changes_detected
+  - git_conflict
+  - git_authentication_failed

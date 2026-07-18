@@ -1,0 +1,315 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/design-lock.schema.yaml"
+title: "Development Harness Design Lock"
+type: object
+additionalProperties: false
+required:
+  - schema_version
+  - lock
+  - execution_contract
+  - scope
+  - architecture
+  - components
+  - data_boundaries
+  - integration_points
+  - change_boundaries
+  - verification
+  - acceptance_mapping
+  - deviation_policy
+  - constraints
+  - approval
+  - extensions
+properties:
+  schema_version:
+    type: string
+    const: "1.0"
+  lock:
+    type: object
+    additionalProperties: false
+    required:
+      - id
+      - epic_id
+      - status
+      - revision
+      - plan_revision
+      - created_at
+    properties:
+      id:
+        type: string
+        minLength: 1
+      epic_id:
+        type: string
+        minLength: 1
+      status:
+        type: string
+        enum:
+          - draft
+          - locked
+          - invalidated
+          - superseded
+      revision:
+        type: integer
+        minimum: 1
+      plan_revision:
+        type: integer
+        minimum: 1
+      created_at:
+        type: string
+        format: date-time
+  execution_contract:
+    type: object
+    additionalProperties: false
+    required:
+      - plan_path
+      - related_adrs
+      - repository_root
+      - base_branch
+    properties:
+      plan_path:
+        type: string
+        minLength: 1
+      related_adrs:
+        type: array
+        items:
+          type: string
+      repository_root:
+        type: string
+        minLength: 1
+      base_branch:
+        type: string
+        minLength: 1
+  scope:
+    type: object
+    additionalProperties: false
+    required:
+      - in_scope
+      - out_of_scope
+      - completion_conditions
+    properties:
+      in_scope:
+        type: array
+        minItems: 1
+        items:
+          type: string
+      out_of_scope:
+        type: array
+        items:
+          type: string
+      completion_conditions:
+        type: array
+        minItems: 1
+        items:
+          type: string
+  architecture:
+    type: object
+    additionalProperties: false
+    required:
+      - modules
+      - dependency_direction
+      - public_boundaries
+      - forbidden_dependencies
+    properties:
+      modules:
+        type: array
+        items:
+          type: string
+      dependency_direction:
+        type: array
+        items:
+          type: string
+      public_boundaries:
+        type: array
+        items:
+          type: string
+      forbidden_dependencies:
+        type: array
+        items:
+          type: string
+  components:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - responsibility
+      properties:
+        name:
+          type: string
+          minLength: 1
+        responsibility:
+          type: string
+          minLength: 1
+        public_api:
+          type: array
+          items:
+            type: string
+  data_boundaries:
+    type: object
+    additionalProperties: false
+    required:
+      - input_types
+      - candidate_types
+      - accepted_types
+      - persistence_rules
+      - raw_data_rules
+    properties:
+      input_types:
+        type: array
+        items:
+          type: string
+      candidate_types:
+        type: array
+        items:
+          type: string
+      accepted_types:
+        type: array
+        items:
+          type: string
+      persistence_rules:
+        type: array
+        items:
+          type: string
+      raw_data_rules:
+        type: array
+        items:
+          type: string
+  integration_points:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - direction
+        - contract
+      properties:
+        name:
+          type: string
+        direction:
+          type: string
+        contract:
+          type: string
+  change_boundaries:
+    type: object
+    additionalProperties: false
+    required:
+      - allowed
+      - conditional
+      - forbidden
+    properties:
+      allowed:
+        type: array
+        items:
+          type: string
+      conditional:
+        type: array
+        items:
+          type: string
+      forbidden:
+        type: array
+        items:
+          type: string
+  verification:
+    type: object
+    additionalProperties: false
+    required:
+      - required_tests
+      - negative_cases
+      - smoke_tests
+      - release_checks
+    properties:
+      required_tests:
+        type: array
+        minItems: 1
+        items:
+          type: string
+      negative_cases:
+        type: array
+        items:
+          type: string
+      smoke_tests:
+        type: array
+        items:
+          type: string
+      release_checks:
+        type: array
+        items:
+          type: string
+  acceptance_mapping:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - acceptance_criterion
+        - verification
+      properties:
+        acceptance_criterion:
+          type: string
+        verification:
+          type: string
+  deviation_policy:
+    type: object
+    additionalProperties: false
+    required:
+      - autonomous
+      - recorded
+      - blocking
+    properties:
+      autonomous:
+        type: array
+        items:
+          type: string
+      recorded:
+        type: array
+        items:
+          type: string
+      blocking:
+        type: array
+        items:
+          type: string
+  constraints:
+    type: array
+    items:
+      type: string
+  approval:
+    type: object
+    additionalProperties: false
+    required:
+      - submitted
+      - submitted_by
+      - submitted_at
+    properties:
+      submitted:
+        type: boolean
+      submitted_by:
+        anyOf:
+          - type: string
+          - type: "null"
+      submitted_at:
+        anyOf:
+          - type: string
+            format: date-time
+          - type: "null"
+  extensions:
+    type: object
+allOf:
+  - if:
+      properties:
+        lock:
+          properties:
+            status:
+              const: locked
+    then:
+      properties:
+        approval:
+          properties:
+            submitted:
+              const: true
+            submitted_by:
+              type: string
+              minLength: 1
+            submitted_at:
+              type: string
+              format: date-time
