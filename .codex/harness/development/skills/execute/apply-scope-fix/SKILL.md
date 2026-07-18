@@ -75,16 +75,17 @@ This Skill may only propose changes under:
 
 - `/state`
 - `/execution/current_skill`
-- `/execution/changed_files`
-- `/execution/latest_fix_summary`
-- `/review/addressed_findings`
-- `/review/unresolved_findings`
-- `/validation/focused`
+- `/execution/implementation/artifact`
+- `/execution/implementation/revision`
+- `/execution/implementation/changed_files`
+- `/execution/implementation/snapshot_hash`
 - `/warnings`
 - `/blocking_issues`
-- `/deviations`
 
 The Execute Interface, not this Skill, increments fix attempt count.
+Fix summary、addressed/unresolved findings、validation log、deviationsはSkill Outputと更新Implementation Artifactへ保存する。Review resultを変更しない。
+
+Requested transition: `fixing` → `implementation_completed`.
 
 ## Required Result Shape
 

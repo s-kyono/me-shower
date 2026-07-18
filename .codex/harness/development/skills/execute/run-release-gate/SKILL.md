@@ -121,13 +121,23 @@ This Skill may only propose changes under:
 - `/state`
 - `/execution/current_skill`
 - `/release_gate/result`
-- `/release_gate/reference`
-- `/release_gate/checks`
-- `/release_gate/remaining_risks`
+- `/release_gate/artifact`
+- `/release_gate/implementation_revision`
+- `/release_gate/checked_snapshot_hash`
+- `/release_gate/secret_scan`
+- `/release_gate/privacy_scan`
+- `/release_gate/raw_source_scan`
 - `/warnings`
 - `/blocking_issues`
 
 The Skill must not modify implementation files or fix attempt counters.
+Check details、test/scan logs、known failures、remaining risks、Snapshot Manifest本文は`RELEASE_GATE.md` Artifactへ保存する。
+
+Requested transitions:
+
+- `review_accepted` → `release_gate_passed`
+- `review_accepted` → `release_gate_failed`
+- `review_accepted` → `blocked`
 
 ## Required Result Shape
 

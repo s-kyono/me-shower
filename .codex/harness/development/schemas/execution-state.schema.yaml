@@ -12,7 +12,7 @@ required:
   - execution
   - review
   - release_gate
-  - downstream
+  - repository_publish
   - blocking_issues
   - warnings
   - extensions
@@ -67,18 +67,40 @@ properties:
     additionalProperties: false
     required:
       - current_skill
-      - changed_files
+      - context
+      - implementation
       - fix_cycle
     properties:
       current_skill:
         anyOf:
           - type: string
           - type: "null"
-      changed_files:
-        type: array
-        uniqueItems: true
-        items:
-          type: string
+      context:
+        type: object
+        additionalProperties: false
+        required: [artifact, repository_revision, design_lock_revision]
+        properties:
+          artifact:
+            anyOf: [{type: string, minLength: 1}, {type: "null"}]
+          repository_revision:
+            anyOf: [{type: string, pattern: "^[0-9a-f]{40}$"}, {type: "null"}]
+          design_lock_revision:
+            anyOf: [{type: integer, minimum: 1}, {type: "null"}]
+      implementation:
+        type: object
+        additionalProperties: false
+        required: [artifact, revision, changed_files, snapshot_hash]
+        properties:
+          artifact:
+            anyOf: [{type: string, minLength: 1}, {type: "null"}]
+          revision:
+            anyOf: [{type: integer, minimum: 1}, {type: "null"}]
+          changed_files:
+            type: array
+            uniqueItems: true
+            items: {type: string, minLength: 1}
+          snapshot_hash:
+            anyOf: [{type: string, pattern: "^[0-9a-f]{64}$"}, {type: "null"}]
       fix_cycle:
         type: object
         additionalProperties: false
@@ -99,6 +121,8 @@ properties:
     required:
       - latest_result
       - latest_artifact
+      - implementation_revision
+      - reviewed_snapshot_hash
     properties:
       latest_result:
         anyOf:
@@ -112,6 +136,10 @@ properties:
         anyOf:
           - type: string
           - type: "null"
+      implementation_revision:
+        anyOf: [{type: integer, minimum: 1}, {type: "null"}]
+      reviewed_snapshot_hash:
+        anyOf: [{type: string, pattern: "^[0-9a-f]{64}$"}, {type: "null"}]
   release_gate:
     type: object
     additionalProperties: false
@@ -121,6 +149,8 @@ properties:
       - secret_scan
       - privacy_scan
       - raw_source_scan
+      - implementation_revision
+      - checked_snapshot_hash
     properties:
       result:
         anyOf:
@@ -158,78 +188,37 @@ properties:
               - failed
               - blocked
           - type: "null"
-  downstream:
+      implementation_revision:
+        anyOf: [{type: integer, minimum: 1}, {type: "null"}]
+      checked_snapshot_hash:
+        anyOf: [{type: string, pattern: "^[0-9a-f]{64}$"}, {type: "null"}]
+  repository_publish:
     type: object
     additionalProperties: false
     required:
-      - agent
       - handoff_reference
-      - run_id
+      - invocation_request_reference
+      - repository_publish_run_id
       - status
-      - result_reference
-      - next_action
     properties:
-      agent:
-        type: string
-        const: repository-publish
       handoff_reference:
         anyOf:
           - type: string
             minLength: 1
           - type: "null"
-      run_id:
+      invocation_request_reference:
         anyOf:
           - type: string
             minLength: 1
+          - type: "null"
+      repository_publish_run_id:
+        anyOf:
+          - type: string
+            pattern: "^rpr-[0-9a-f]{64}$"
           - type: "null"
       status:
         type: string
-        enum:
-          - not_started
-          - invocation_requested
-          - running
-          - repository_publish_completed
-          - invocation_failed
-          - repository_publish_failed
-          - blocked
-      result_reference:
-        anyOf:
-          - type: string
-            minLength: 1
-          - type: "null"
-      next_action:
-        anyOf:
-          - type: object
-            additionalProperties: false
-            required:
-              - type
-              - target
-              - handoff_reference
-              - repository_publish_run_id
-              - automatic
-              - requires_human_confirmation
-              - on_invocation_failure
-              - deduplication_key
-            properties:
-              type:
-                const: invoke_agent
-              target:
-                const: repository-publish
-              handoff_reference:
-                type: string
-                minLength: 1
-              repository_publish_run_id:
-                type: string
-                pattern: "^rpr-[0-9a-f]{64}$"
-              automatic:
-                const: true
-              requires_human_confirmation:
-                const: false
-              on_invocation_failure:
-                const: invocation_failed
-              deduplication_key:
-                const: repository_publish_run_id
-          - type: "null"
+        enum: [not_ready, invocation_requested]
   blocking_issues:
     type: array
     items:
@@ -259,21 +248,18 @@ allOf:
               const: passed
             raw_source_scan:
               const: passed
-        downstream:
+        repository_publish:
           properties:
             handoff_reference:
               type: string
               minLength: 1
             status:
-              enum:
-                - invocation_requested
-                - running
-                - repository_publish_completed
-                - invocation_failed
-                - repository_publish_failed
-                - blocked
-            next_action:
-              type: object
+              const: invocation_requested
+            invocation_request_reference:
+              type: string
+              minLength: 1
+            repository_publish_run_id:
+              type: string
   - if:
       properties:
         state:

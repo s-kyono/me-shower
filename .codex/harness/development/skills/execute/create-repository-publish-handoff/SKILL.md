@@ -66,15 +66,16 @@ This Skill may only propose changes under:
 
 - `/state`
 - `/execution/current_skill`
-- `/downstream/agent`
-- `/downstream/handoff_reference`
-- `/downstream/status`
-- `/downstream/run_id`
-- `/downstream/next_action`
+- `/repository_publish/handoff_reference`
+- `/repository_publish/invocation_request_reference`
+- `/repository_publish/repository_publish_run_id`
+- `/repository_publish/status`
 - `/warnings`
 - `/blocking_issues`
 
-`downstream.status`はhandoff生成時に`invocation_requested`とする。`next_action.type`は`invoke_agent`、targetは`repository-publish`、`automatic`は`true`、`requires_human_confirmation`は`false`とする。上位Agent Routerが実際の起動主体であり、同一run IDの処理中・完了Runを重複起動してはならない。起動失敗はRouter-owned Invocation Resultの`invocation_failed`として返し、RouterはExecution Stateを直接変更しない。Repository Publish Agentの内部状態やGit公開結果を追加してはならない。
+`repository_publish.status`はhandoffとInvocation Request Artifact生成後に`invocation_requested`とする。Invocation Request本文はArtifactに保存し、Stateには参照だけを保持する。上位Agent Routerが実際の起動主体であり、Repository Publish Agentの内部状態やGit公開結果を追加してはならない。
+
+Requested transition: `release_gate_passed` → `repository_publish_handoff_ready`.
 
 ## Required Result Shape
 

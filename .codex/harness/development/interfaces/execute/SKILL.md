@@ -73,7 +73,7 @@ Required:
 - passed `RELEASE_GATE.md`
 - Repository Publish Handoff reference
 - Agent Invocation Request
-- downstream status
+- Repository Publish handoff status
 - remaining risks
 
 ## Human Gates
@@ -98,6 +98,45 @@ Human Action is required when:
 - Apply atomically and increment revision only after success.
 - Re-read and validate State after writing.
 - Fix attempt count belongs to the implementation/re-submission process, not the reviewer.
+
+### State Patch Validation Order
+
+Before applying an Execute Skill patch, the Interface must:
+
+1. Validate the State Patch against `shared/state-patch.schema.yaml`.
+2. Require target `execution-state` and source interface `execute`.
+3. Match expected revision and workflow state to the current State.
+4. Match source Skill ID to the Skill invoked for this interaction.
+5. Reject root replacement, direct `/revision` mutation, and every operation outside the Skill-specific allowlist.
+6. Apply operations to an isolated copy; never mutate current State during validation.
+7. Increment revision itself exactly once after operations succeed.
+8. Validate the candidate against `schemas/execution-state.schema.yaml` Draft 2020-12.
+9. Validate all postconditions.
+10. Validate the destination State's fixed `entry_guard`; Skill-declared postconditions never replace this guard.
+11. Validate requested transition against `interfaces/execute/workflow.yaml` and require candidate `/state` to equal its destination.
+12. Atomically replace current State only after every check succeeds; otherwise apply none.
+
+The executable reference validator is `.codex/harness/development/shared/execution_state_patch.py`.
+
+`primary_skill` and `interface_action` are read from `workflow.yaml`. A Skill patch is accepted only when the current State's `primary_skill` equals the invoked Skill. States with `interface_action` reject Skill patches. `increment_fix_attempt` is an Interface-owned atomic action: the Interface increments the counter and selects `fixing` or `blocked`; callers do not supply a destination.
+
+### Schema and Runtime Guard Boundary
+
+- `execution-state.schema.yaml` owns structural types, required fields, enums, nullability across lifecycle stages, and `additionalProperties` rejection.
+- Each Workflow State names one `entry_guard`; `execution_state_patch.py` is the executable source of truth for semantic and cross-field conditions.
+- Runtime guards own revision/hash equality, scan/result consistency, unresolved Blocking Issue checks, fix-counter boundaries, and source-State requirements.
+- Skill-declared postconditions are supplementary assertions and must contain at least one item; they cannot weaken or replace an `entry_guard`.
+
+### Skill Patch Allowlists
+
+- `inspect-execution-context`: `/state`, `/execution/current_skill`, `/execution/context/*`, `/warnings`, `/blocking_issues`
+- `implement`: `/state`, `/execution/current_skill`, `/execution/implementation/*`, `/warnings`, `/blocking_issues`
+- `review-implementation`: `/state`, `/execution/current_skill`, `/review/*`, `/warnings`, `/blocking_issues`
+- `apply-scope-fix`: `/state`, `/execution/current_skill`, `/execution/implementation/*`, `/warnings`, `/blocking_issues`
+- `run-release-gate`: `/state`, `/execution/current_skill`, `/release_gate/*`, `/warnings`, `/blocking_issues`
+- `create-repository-publish-handoff`: `/state`, `/execution/current_skill`, `/repository_publish/*`, `/warnings`, `/blocking_issues`
+
+Artifact本文、Repository Context、diff、test/scan log、Review findings、Git公開結果はallowlistへ追加しない。
 
 ## Skill Invocation Rules
 

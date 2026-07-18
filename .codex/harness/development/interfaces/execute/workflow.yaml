@@ -7,18 +7,20 @@ terminal_states:
 
 fix_cycle:
   owner: execute-interface
-  counter: fix_attempt_count
+  counter: attempt_count
   maximum_attempts: 5
   reviewer_owns_counter: false
 
 states:
   execution_started:
+    entry_guard: execution_started
     primary_skill: inspect-execution-context
     transitions:
       context_ready: execution_context_ready
       blocked: blocked
 
   execution_context_ready:
+    entry_guard: execution_context_ready
     primary_skill: implement
     transitions:
       implementation_completed: implementation_completed
@@ -26,6 +28,7 @@ states:
       failed: blocked
 
   implementation_completed:
+    entry_guard: implementation_completed
     primary_skill: review-implementation
     transitions:
       review_accepted: review_accepted
@@ -33,12 +36,14 @@ states:
       review_blocked: blocked
 
   changes_required:
+    entry_guard: changes_required
     interface_action: increment_fix_attempt
     transitions:
       attempts_available: fixing
       attempt_limit_reached: blocked
 
   fixing:
+    entry_guard: fixing
     primary_skill: apply-scope-fix
     transitions:
       fix_completed: implementation_completed
@@ -46,6 +51,7 @@ states:
       failed: blocked
 
   review_accepted:
+    entry_guard: review_accepted
     primary_skill: run-release-gate
     transitions:
       release_gate_passed: release_gate_passed
@@ -53,12 +59,14 @@ states:
       release_gate_blocked: blocked
 
   release_gate_failed:
+    entry_guard: release_gate_failed
     interface_action: increment_fix_attempt
     transitions:
       attempts_available: fixing
       attempt_limit_reached: blocked
 
   release_gate_passed:
+    entry_guard: release_gate_passed
     primary_skill: create-repository-publish-handoff
     transitions:
       repository_publish_handoff_ready: repository_publish_handoff_ready
@@ -66,15 +74,18 @@ states:
       failed: blocked
 
   repository_publish_handoff_ready:
+    entry_guard: repository_publish_handoff_ready
     interface_action: complete_execution
     transitions:
       development_completed: development_completed
 
   development_completed:
+    entry_guard: development_completed
     primary_skill: null
     transitions: {}
 
   blocked:
+    entry_guard: blocked
     primary_skill: null
     allowed_human_actions:
       - return_to_plan
@@ -85,6 +96,7 @@ states:
       issue_resolved: execution_started
 
   aborted:
+    entry_guard: aborted
     primary_skill: null
     transitions: {}
 

@@ -46,6 +46,7 @@ responsibility: single
 - `known_constraints`
 - `known_unknowns`
 - `state_patch`
+- `context_artifact_content`
 
 ## Responsibilities
 
@@ -81,12 +82,15 @@ This Skill may only propose changes under:
 
 - `/state`
 - `/execution/current_skill`
-- `/execution/context_summary`
-- `/execution/allowed_changes`
-- `/execution/forbidden_changes`
-- `/validation/required`
+- `/execution/context/artifact`
+- `/execution/context/repository_revision`
+- `/execution/context/design_lock_revision`
 - `/warnings`
 - `/blocking_issues`
+
+Repository Context、allowed/forbidden changes、validation detailsはSkill OutputとContext Artifactへ保存し、Execution Stateへ本文を複製しない。
+
+Requested transition: `execution_started` → `execution_context_ready`.
 
 ## Required Result Shape
 

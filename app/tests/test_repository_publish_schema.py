@@ -29,6 +29,8 @@ SCHEMAS = [
     load(SCHEMA_DIR / "execution-state.schema.yaml"),
     load(SCHEMA_DIR / "repository-publish-handoff.schema.yaml"),
     load(SHARED_DIR / "blocking-issue.schema.yaml"),
+    load(SHARED_DIR / "state-patch.schema.yaml"),
+    load(SHARED_DIR / "skill-result.schema.yaml"),
     load(AGENT_SHARED_DIR / "agent-invocation-result.schema.yaml"),
 ]
 REGISTRY = Registry().with_resources(
@@ -76,14 +78,21 @@ def valid_execution_state(handoff):
     return {
         "schema_version": "1.0", "epic": "EPIC-1", "state": "development_completed", "revision": 4,
         "design_lock": {"status": "aligned", "path": "DESIGN_LOCK.md", "revision": 2},
-        "execution": {"current_skill": None, "changed_files": ["src/example.py"],
+        "execution": {"current_skill": None,
+                      "context": {"artifact": "context.yaml", "repository_revision": "0" * 40,
+                                  "design_lock_revision": 2},
+                      "implementation": {"artifact": "implementation.yaml", "revision": 3,
+                                         "changed_files": ["src/example.py"], "snapshot_hash": HASH},
                       "fix_cycle": {"attempt_count": 0, "maximum_attempts": 5}},
-        "review": {"latest_result": "accepted", "latest_artifact": "REVIEW.md"},
+        "review": {"latest_result": "accepted", "latest_artifact": "REVIEW.md",
+                   "implementation_revision": 3, "reviewed_snapshot_hash": HASH},
         "release_gate": {"result": "passed", "artifact": "RELEASE_GATE.md", "secret_scan": "passed",
-                         "privacy_scan": "passed", "raw_source_scan": "passed"},
-        "downstream": {"agent": "repository-publish", "handoff_reference": "handoff.yaml",
-                       "run_id": handoff["repository_publish_run_id"], "status": "invocation_requested",
-                       "result_reference": None, "next_action": handoff["next_action"]},
+                         "privacy_scan": "passed", "raw_source_scan": "passed",
+                         "implementation_revision": 3, "checked_snapshot_hash": HASH},
+        "repository_publish": {"handoff_reference": "handoff.yaml",
+                               "invocation_request_reference": "invocation.yaml",
+                               "repository_publish_run_id": handoff["repository_publish_run_id"],
+                               "status": "invocation_requested"},
         "blocking_issues": [], "warnings": [], "extensions": {},
     }
 
@@ -130,7 +139,7 @@ def test_execution_schema_rejects_unknown_state_and_field() -> None:
     with pytest.raises(ValidationError):
         validator("Development Harness Execution State").validate(state)
     state = valid_execution_state(handoff)
-    state["downstream"]["commit_sha"] = "0" * 40
+    state["repository_publish"]["commit_sha"] = "0" * 40
     with pytest.raises(ValidationError):
         validator("Development Harness Execution State").validate(state)
 
@@ -144,3 +153,28 @@ def test_router_owned_invocation_result_success_and_failure() -> None:
     invocation_validator.validate({**base, "status": "invocation_failed", "error_code": "AGENT_START_FAILED"})
     with pytest.raises(ValidationError):
         invocation_validator.validate({**base, "status": "invocation_failed", "error_code": None})
+
+
+def test_skill_result_and_state_patch_schema_accept_known_shape_and_reject_unknown_field() -> None:
+    state_patch = {
+        "schema_version": "1.0", "patch": {"id": "SP-2000", "target": "execution-state",
+        "expected": {"revision": 0, "workflow_state": "execution_started"},
+        "source": {"interface": "execute", "skill_id": "inspect-execution-context"},
+        "intent": "inspect", "operations": [{"op": "replace", "path": "/state", "value": "execution_context_ready"}],
+        "postconditions": [{"type": "equals", "path": "/state", "value": "execution_context_ready"}],
+        "requested_transition": {"from": "execution_started", "to": "execution_context_ready"},
+        "risk": {"level": "low", "touches_human_approval": False, "touches_design_lock": False,
+                 "touches_source_of_truth": False, "touches_persistence_boundary": False,
+                 "touches_security_boundary": False}, "extensions": {}}}
+    result = {"schema_version": "1.0", "skill": {"id": "inspect-execution-context", "version": "1.0"},
+              "execution": {"status": "completed", "summary": "Inspected."}, "output": {},
+              "state_patch": state_patch,
+              "human_interaction": {"required": False, "reason": None, "allowed_actions": []},
+              "warnings": [], "blocking_issues": [], "deviations": [],
+              "diagnostics": {"started_at": None, "completed_at": None, "references": []}, "extensions": {}}
+    validator("Development Harness State Patch").validate(state_patch)
+    validator("Development Harness Skill Result").validate(result)
+    invalid = copy.deepcopy(state_patch)
+    invalid["patch"]["unknown"] = True
+    with pytest.raises(ValidationError):
+        validator("Development Harness State Patch").validate(invalid)

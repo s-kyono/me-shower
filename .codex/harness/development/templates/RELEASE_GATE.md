@@ -4,6 +4,8 @@ status: "{{ passed | failed | blocked }}"
 checked_at: "{{ checked_at }}"
 design_lock_revision: {{ design_lock_revision }}
 review_result: "{{ review_result }}"
+implementation_revision: {{ implementation_revision }}
+checked_snapshot_hash: "{{ checked_snapshot_hash }}"
 ---
 
 # Release Gate

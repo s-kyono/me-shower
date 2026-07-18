@@ -114,13 +114,20 @@ This Skill may only propose changes under:
 - `/state`
 - `/execution/current_skill`
 - `/review/latest_result`
-- `/review/latest_reference`
-- `/review/findings`
-- `/review/remaining_risks`
+- `/review/latest_artifact`
+- `/review/implementation_revision`
+- `/review/reviewed_snapshot_hash`
 - `/warnings`
 - `/blocking_issues`
 
 The Skill must not modify fix attempt counters.
+Findings、remaining risks、Review本文は`REVIEW.md` Artifactへ保存し、Execution Stateへ複製しない。
+
+Requested transitions:
+
+- `implementation_completed` → `review_accepted`
+- `implementation_completed` → `changes_required`
+- `implementation_completed` → `blocked`
 
 ## Required Result Shape
 

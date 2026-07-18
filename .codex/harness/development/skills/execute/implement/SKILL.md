@@ -43,6 +43,7 @@ Design Lockで固定されたScope、Architecture、Data Boundary、Acceptance M
 - `recorded_deviations`
 - `unresolved_items`
 - `state_patch`
+- `implementation_artifact_content`
 
 ## Responsibilities
 
@@ -88,14 +89,17 @@ This Skill may only propose changes under:
 
 - `/state`
 - `/execution/current_skill`
-- `/execution/changed_files`
-- `/execution/implementation_summary`
-- `/validation/focused`
+- `/execution/implementation/artifact`
+- `/execution/implementation/revision`
+- `/execution/implementation/changed_files`
+- `/execution/implementation/snapshot_hash`
 - `/warnings`
 - `/blocking_issues`
-- `/deviations`
 
 The Skill must not modify fix attempt counters.
+Implementation summary、validation log、diff本文、deviationsはSkill OutputとImplementation Artifactへ保存する。
+
+Requested transition: `execution_context_ready` → `implementation_completed`.
 
 ## Required Result Shape
 

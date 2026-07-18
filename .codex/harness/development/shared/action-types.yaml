@@ -169,6 +169,15 @@ interface_actions:
     requires_payload: false
     payload_type: null
 
+  - id: "complete_execution"
+    title: "Complete Development Execution"
+    description: |
+      Repository Publish handoffとAgent Invocation Request生成後に、Development Harnessの責務を完了する。
+      Git公開またはPull Request作成の完了を意味しない。
+    scopes: ["execute"]
+    requires_payload: false
+    payload_type: null
+
 workflow_events:
   - id: "decision_discovered"
     scopes: ["plan"]
@@ -182,6 +191,9 @@ workflow_events:
   - id: "design_locked"
     scopes: ["plan"]
 
+  - id: "context_ready"
+    scopes: ["execute"]
+
   - id: "implementation_completed"
     scopes: ["execute"]
 
@@ -192,6 +204,9 @@ workflow_events:
     scopes: ["execute"]
 
   - id: "review_blocked"
+    scopes: ["execute"]
+
+  - id: "fix_completed"
     scopes: ["execute"]
 
   - id: "release_gate_passed"

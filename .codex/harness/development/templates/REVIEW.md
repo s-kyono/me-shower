@@ -5,6 +5,7 @@ reviewed_at: "{{ reviewed_at }}"
 reviewer: "{{ reviewer }}"
 design_lock_revision: {{ design_lock_revision }}
 implementation_revision: {{ implementation_revision }}
+reviewed_snapshot_hash: "{{ reviewed_snapshot_hash }}"
 ---
 
 # Implementation Review
