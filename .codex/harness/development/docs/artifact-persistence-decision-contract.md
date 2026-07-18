@@ -3,7 +3,7 @@
 ## Status
 
 - Decision status: accepted design decision
-- Scope: formal-adoption ownership and Human execution-authorization binding for Development Harness artifacts
+- Scope: formal-adoption ownership, Human execution-authorization binding, and immutable Artifact revision evidence for Development Harness artifacts
 - Implementation status: contract only
 - Effective boundary: Artifact generation, persistence, and formal adoption are separate responsibilities
 
@@ -11,9 +11,9 @@ This contract uses **formal-adoption decision owner** instead of the less explic
 
 ## Scope
 
-This decision defines who may decide that an Artifact or Decision is formally adopted, how Plan readiness remains separate from Human implementation delegation, and how both decisions bind to the execution package.
+This decision defines who may decide that an Artifact or Decision is formally adopted, how Plan readiness remains separate from Human implementation delegation, and how revisioned evidence binds both decisions to the execution package.
 
-It does not define storage paths, revision history, Write Request fields, atomic persistence, State persistence, or an Artifact Writer implementation.
+It does not define storage paths, Write Request or Reference Schemas, atomic persistence, State persistence, or an Artifact Writer implementation.
 
 The governing separation is:
 
@@ -239,7 +239,7 @@ To avoid unnecessary Human Gates for implementation detail, the original immutab
 - changes are limited to technical detail within the granted direction; and
 - the successor Plan is reviewed again and reaches `ready_for_delegation` with fresh evidence.
 
-The compatibility result binds both the originally authorized Plan and the successor revision/hash. It creates an **effective authorization binding** for the successor without altering the immutable Human grant or generating a new `granted` status.
+The compatibility result binds both the originally authorized Plan and the successor revision/hash. It creates a new immutable authorization-continuation record, with its own authorization revision, without altering the original Human grant or generating a new Human `granted` decision.
 
 Examples that may qualify include file selection, function or class naming, additional tests, implementation order, and error-handling detail within accepted Decisions.
 
@@ -269,6 +269,203 @@ The Execute Interface does not repeat Plan or Design Review. Before implementati
 - any authorization-continuation evidence is valid when the current Plan differs from the original Human grant.
 
 Any mismatch, missing evidence, stale reference, unknown status, Decision Drift, or unresolved Blocking Issue fails closed before Execute begins.
+
+## Artifact Revision Model and Evidence Chain
+
+The canonical evidence used to reach Execute is a chain of immutable, revision-addressed records. It preserves decisions, concretization, verification, delegation, and the selected execution target. It does not preserve complete conversations, reasoning traces, or raw work logs.
+
+```text
+Accepted Decision / ADR Decision Record
+  → Plan Artifact Reference
+  → Plan Review and Design Review References
+  → Design Lock Reference
+  → Readiness Evidence Reference
+  → Human Authorization or Authorization Continuation Reference
+  → Execute Handoff
+```
+
+Every Artifact Reference in this chain identifies at least:
+
+```yaml
+logical_artifact_id: string
+artifact_revision: integer
+content_hash: string
+```
+
+`content_hash` is a SHA-256 identity over a canonical Artifact envelope containing the exact persisted content bytes and all immutable Artifact metadata. It performs no semantic or newline normalization. The future Schema decision must fix the envelope serialization so independent readers produce the same hash; changing either content bytes or covered metadata changes the hash and requires a new revision.
+
+A record that evaluates, locks, or hands off another subject also identifies:
+
+```yaml
+subject_logical_artifact_id: string
+subject_revision: integer
+subject_hash: string
+```
+
+An Execute Handoff must carry or reference enough of this chain to prove that the accepted Decisions, reviewed Plan, locked design, readiness result, Human authorization, and selected execution target all refer to the same revisions and hashes. Execute fails closed if a reference is missing, stale, superseded without valid continuation evidence, or inconsistent with another link.
+
+### Distinct Revision Domains
+
+The following revision domains are independent:
+
+```text
+Artifact revision
+≠ Subject revision
+≠ State revision
+≠ Decision revision
+≠ Authorization revision
+```
+
+Equal numeric values do not imply identity or synchronization. These domains must not be collapsed into one generic `revision` field.
+
+| Revision or identifier | Meaning |
+| --- | --- |
+| Artifact revision | A version of immutable content and immutable Artifact metadata within one logical Artifact series |
+| Subject revision | The version of the Plan, implementation, or other subject evaluated or locked by an Artifact |
+| State revision | The optimistic-concurrency version of Workflow State; it does not version Artifact bytes |
+| Decision revision | A version of one Decision's meaning, constraints, or selected option |
+| Authorization revision | A version in the immutable authorization/continuation record series |
+| Accepted Decision-set hash | A deterministic identity for the normalized set of accepted Decision IDs, Decision revisions, and decision-content hashes |
+
+The accepted Decision-set hash is computed from a canonical, order-independent representation of the accepted Decision set. Exact serialization and Schema are deferred, but implementations must sort by stable Decision identity and must not depend on presentation order.
+
+### Immutable Artifact Rule
+
+Persisted Artifact revisions are immutable and create-only. A change to any content byte or immutable Artifact metadata creates a new Artifact revision, even when the change appears editorial. Neither AI nor the Writer may classify a change as harmless and overwrite the existing revision.
+
+The canonical source is the revision-addressed Artifact Reference, not a fixed filename. A future fixed path such as `PLAN.md` may be a current view, generated view, pointer, or convenience copy, but State, Review, Design Lock, Human Authorization, and Execute Handoff must not use that path alone as canonical identity.
+
+This contract does not select the final directory layout. A path such as a revisioned Plan location is illustrative only and does not establish Path Policy.
+
+### Logical Artifact Identity
+
+A logical Artifact is a stable series serving one purpose; an Artifact revision identifies one immutable member of that series.
+
+```yaml
+logical_artifact_id: main-plan
+artifact_revision: 4
+```
+
+Logical IDs are stable within their Artifact type and repository scope. Revisions are positive, monotonically increasing integers allocated independently within a logical Artifact series. A gap is permitted after an abandoned allocation, but an existing revision is never reused for different bytes.
+
+### Revision Allocation Ownership
+
+Revision allocation belongs to the Interface acting through a future Persistence Orchestrator:
+
+```text
+Skill
+  → generates an Artifact Candidate without assigning a final revision
+
+Interface / Persistence Orchestrator
+  → resolves the logical Artifact series
+  → verifies expected latest revision and hash
+  → allocates the next Artifact revision
+  → issues a create-only persistence request
+
+Artifact Writer
+  → writes only the assigned revision
+  → never chooses, increments, or reuses a revision independently
+```
+
+The allocation and persistence mechanics are not implemented by this decision.
+
+### Artifact, Workflow State, and Authorization Separation
+
+Artifact revisions change only when Artifact content or immutable metadata changes. Workflow status changes do not rewrite the Artifact or create a new Artifact revision by themselves.
+
+```text
+Plan Artifact revision 4 remains immutable
+Workflow State may move drafting → reviewing → ready_for_delegation
+Human Authorization remains a separate immutable record series
+```
+
+Workflow State owns current status and current references. Human authorization owns delegation evidence. Neither status nor authorization is written back into Plan Artifact content.
+
+### Human Authorization Revision Binding
+
+An authorization record binds to a specific Plan logical ID, Artifact revision, content hash, accepted Decision-set hash, and readiness evidence:
+
+```yaml
+authorization_revision: 1
+authorized_plan_logical_id: main-plan
+authorized_plan_revision: 4
+authorized_plan_hash: string
+authorized_decision_set_hash: string
+readiness_evidence_reference: object
+```
+
+The original Human authorization record is immutable. When a later Plan qualifies for automatic delegation continuation under the previously defined compatibility rules, the Harness produces a new immutable authorization-continuation record with the next authorization revision. That record references the original Human grant, the preceding effective authorization revision, the successor Plan revision/hash, its Decision-set hash, fresh readiness evidence, and the compatibility evidence. It records derived continuity; it does not impersonate a new Human grant.
+
+When continuation conditions fail, no continuation record may be created. The old authorization remains historical evidence but is ineffective for the new Plan, and Human reauthorization is required.
+
+### Artifact-specific Revision Bindings
+
+| Artifact or record | Revision identity | Required subject binding |
+| --- | --- | --- |
+| Decision / ADR Artifact | Logical ADR ID and Artifact revision; Decision ID and Decision revision are distinct | Decision content hash; Human accept/reject/defer remains a separate immutable Decision Record |
+| Plan | Plan logical ID and Artifact revision | Accepted Decision-set hash |
+| Plan Review | Review logical ID and Artifact revision | Plan logical ID, Plan revision/hash, accepted Decision-set hash |
+| Design Review / Guardrail Validation | Evidence logical ID and Artifact revision | Plan logical ID, Plan revision/hash, accepted Decision-set hash |
+| Design Lock | Design Lock logical ID and Artifact revision | Plan logical ID, Plan revision/hash, accepted Decision-set hash |
+| Implementation Review | Review logical ID and Artifact revision | Implementation revision and repository snapshot hash |
+| Release Gate | Gate logical ID and Artifact revision | Implementation revision and checked repository snapshot hash |
+| Repository Publish Handoff | Handoff logical ID and Artifact revision | Accepted Decision-set hash, Plan reference, Plan Review and Design Lock references, readiness reference, authorization/effective binding reference, implementation revision/hash, Implementation Review reference, and Release Gate reference |
+
+Re-reviewing unchanged Plan or implementation content does not change the subject revision. It creates a new Review Artifact revision in the relevant Review series. Changing the Plan creates a new Plan Artifact revision and makes prior Plan Review and Design Lock evidence stale for that new revision.
+
+ADR content and Human Decision status are also separate: changing an ADR's prose or metadata creates a new ADR Artifact revision, while accept, reject, or defer is recorded in an immutable Decision Record bound to the Decision revision and hash. Approval is never implemented by editing status inside the persisted ADR revision.
+
+### Superseded Artifacts
+
+Creating a new revision does not delete or modify an older revision. Current State may point to the new reference, and the new Artifact metadata or a separate relationship record may identify the predecessor:
+
+```yaml
+supersedes:
+  logical_artifact_id: main-plan
+  artifact_revision: 3
+  content_hash: string
+```
+
+Supersession is a relationship, not an in-place status update to the old Artifact. Historical revisions remain addressable for evidence and audit. An older revision cannot be used as current execution evidence unless the Workflow explicitly selects it and all dependent evidence and authorization bind to that exact revision.
+
+### Stale-write Prevention
+
+A future create request must carry at least the following concurrency preconditions at the contract level:
+
+```yaml
+logical_artifact_id: main-plan
+new_artifact_revision: 5
+expected_latest_revision: 4
+expected_latest_hash: string
+content_hash: string
+```
+
+The Persistence Orchestrator verifies the expected latest revision and hash before allocation and again as part of the create-only operation. Any mismatch is blocked; last-writer-wins is forbidden. A stale State revision cannot authorize a write merely because its requested new revision is not yet visible to the caller.
+
+### Idempotency
+
+Write outcomes are determined by revision and hash:
+
+| Existing condition | Required outcome |
+| --- | --- |
+| Same logical ID, same revision, same content hash | `already_written`; idempotent success returning the existing reference |
+| Same logical ID, same revision, different content hash | `blocked`; never overwrite |
+| New revision with stale expected latest revision or hash | `blocked` |
+| New revision with current expected latest revision/hash and no target collision | Eligible for create-only persistence |
+
+`already_written` must verify the persisted bytes and immutable metadata represented by the hash; matching only a caller-supplied value is insufficient.
+
+### Evidence Retention Boundary
+
+Revisioned persistence is limited to formal evidence needed to reconstruct execution eligibility:
+
+- accepted Decisions and their decision records;
+- Plan concretization;
+- Review, Design Lock, readiness, and guardrail evidence;
+- Human authorization and continuation records; and
+- Execute and repository-publish handoff evidence.
+
+It must not retain complete conversations, hidden reasoning, complete Tool output, temporary experiments, unnecessary intermediate generations, raw source, credentials, secrets, private information, or personal information. Revision history is not permission to persist prohibited content.
 
 ## Status Update Owner Matrix
 
@@ -381,7 +578,6 @@ Future Workflow alignment must preserve this accepted ownership rule: Human Acti
 
 The following remain future decisions:
 
-- revision history versus fixed-path replacement;
 - Artifact-first versus State-first update ordering;
 - orphan Artifact policy;
 - required Artifact Write Request fields;
@@ -402,7 +598,7 @@ The following remain future decisions:
 The next Artifact Persistence design decision is:
 
 ```text
-revision history versus fixed-path replacement
+Artifact type and Path Policy
 ```
 
-That decision must be made before defining final Path Policy, replacement preconditions, or Artifact Reference structure.
+That decision must map each Artifact type and logical series to allowed repository-relative locations without changing the immutable revision model established here.
