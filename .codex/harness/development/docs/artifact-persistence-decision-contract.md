@@ -3,7 +3,7 @@
 ## Status
 
 - Decision status: accepted design decision
-- Scope: formal-adoption ownership, Human execution-authorization binding, and immutable Artifact revision evidence for Development Harness artifacts
+- Scope: formal-adoption ownership, Human execution-authorization binding, immutable revision evidence, and Artifact type-to-path policy for Development Harness artifacts
 - Implementation status: contract only
 - Effective boundary: Artifact generation, persistence, and formal adoption are separate responsibilities
 
@@ -11,9 +11,9 @@ This contract uses **formal-adoption decision owner** instead of the less explic
 
 ## Scope
 
-This decision defines who may decide that an Artifact or Decision is formally adopted, how Plan readiness remains separate from Human implementation delegation, and how revisioned evidence binds both decisions to the execution package.
+This decision defines who may decide that an Artifact or Decision is formally adopted, how Plan readiness remains separate from Human implementation delegation, how revisioned evidence binds both decisions to the execution package, and how each registered Artifact type maps to a safe repository path.
 
-It does not define storage paths, Write Request or Reference Schemas, atomic persistence, State persistence, or an Artifact Writer implementation.
+It does not implement Path Policy, define Write Request or Reference Schemas, perform atomic persistence, persist State, or implement an Artifact Writer.
 
 The governing separation is:
 
@@ -333,9 +333,9 @@ The accepted Decision-set hash is computed from a canonical, order-independent r
 
 Persisted Artifact revisions are immutable and create-only. A change to any content byte or immutable Artifact metadata creates a new Artifact revision, even when the change appears editorial. Neither AI nor the Writer may classify a change as harmless and overwrite the existing revision.
 
-The canonical source is the revision-addressed Artifact Reference, not a fixed filename. A future fixed path such as `PLAN.md` may be a current view, generated view, pointer, or convenience copy, but State, Review, Design Lock, Human Authorization, and Execute Handoff must not use that path alone as canonical identity.
+The canonical source is the revision-addressed Artifact Reference, not a fixed filename. A future fixed path such as `PLAN.md` may only be a generated Convenience View, but State, Review, Design Lock, Human Authorization, and Execute Handoff must not use that path alone as canonical identity.
 
-This contract does not select the final directory layout. A path such as a revisioned Plan location is illustrative only and does not establish Path Policy.
+The registered directory layout and Path Policy are defined below. They preserve this immutable revision rule; changing the layout requires a new accepted Path Policy decision and must not silently reinterpret existing references.
 
 ### Logical Artifact Identity
 
@@ -467,6 +467,223 @@ Revisioned persistence is limited to formal evidence needed to reconstruct execu
 
 It must not retain complete conversations, hidden reasoning, complete Tool output, temporary experiments, unnecessary intermediate generations, raw source, credentials, secrets, private information, or personal information. Revision history is not permission to persist prohibited content.
 
+## Artifact Type and Path Policy
+
+### Artifact Root
+
+The repository-relative Artifact Root is fixed as:
+
+```text
+.codex/harness/development/artifacts/
+```
+
+All canonical revisioned Artifacts governed by the Development Harness, including downstream evidence that it references, must be stored below this root according to the registered type pattern. A repository-relative Artifact Reference includes this full path. An absolute path, a path outside the repository, `..`, an empty segment, a backslash separator, or any normalized or symlink-resolved destination outside Artifact Root is invalid.
+
+Artifact Root itself must resolve inside the real Repository Root. A Skill, model response, Human-supplied title, or other untrusted input cannot supply a target path.
+
+### Artifact Classifications
+
+| Classification | Purpose | Registered types |
+| --- | --- | --- |
+| Decision Artifact | Preserve important Decision content, rationale, selection, and Human disposition evidence | `adr`, `decision_record`, `authorization_grant`, `authorization_continuation`, `authorization_revocation` |
+| Planning Artifact | Concretize accepted Decisions and prove Plan readiness | `plan`, `plan_review`, `design_review`, `guardrail_validation`, `design_lock`, `readiness_evidence` |
+| Execution Evidence | Prove implementation review, correction need, release eligibility, and repository-publish handoff/result | `implementation_review`, `release_gate`, `fix_request`, `repository_publish_handoff`, `repository_publish_result` |
+| Convenience View | Optional regenerated Human-readable display; never canonical evidence | No registered canonical type in the initial implementation |
+
+`decision_record` is the single structured type for Human accept, reject, or defer actions, including an ADR decision. Separate `adr_decision_record` and `human_decision_record` types are not registered because they would duplicate that responsibility. Generic ambiguous types such as `review` are also prohibited; Plan, design, and implementation reviews remain distinct.
+
+Authorization records are classified with Decision evidence because they preserve Human delegation or its derived continuation/revocation. They remain distinct registered types because their provenance and transition semantics differ.
+
+`repository_publish_result` is produced and formally owned by the Repository Publish Agent. Its inclusion in this registry defines how the Development Harness may reference the downstream result without copying Git publication fields into Execution State or taking ownership of publication.
+
+### Closed Artifact Type and Format Registry
+
+Artifact type is a closed enum, not a free string. Each type has one canonical format and extension:
+
+| Artifact type | Canonical format | Extension | Primary content owner |
+| --- | --- | --- | --- |
+| `adr` | Markdown | `.md` | Plan Skill candidate; Human Decision remains separate |
+| `decision_record` | JSON | `.json` | Plan Interface recording a Human Action |
+| `plan` | Markdown | `.md` | Plan Skills |
+| `plan_review` | Markdown | `.md` | Plan Reviewer |
+| `design_review` | Markdown | `.md` | Design Reviewer |
+| `guardrail_validation` | JSON | `.json` | Guardrail Validator |
+| `design_lock` | Markdown | `.md` | Plan Interface from validated design evidence |
+| `readiness_evidence` | JSON | `.json` | Plan Interface aggregation |
+| `implementation_review` | Markdown | `.md` | Implementation Reviewer |
+| `release_gate` | Markdown | `.md` | Release Gate Skill |
+| `fix_request` | JSON | `.json` | Review or Gate workflow decision owner |
+| `repository_publish_handoff` | JSON | `.json` | Execute Interface |
+| `repository_publish_result` | JSON | `.json` | Repository Publish Agent |
+| `authorization_grant` | JSON | `.json` | Interface recording a Human Action |
+| `authorization_continuation` | JSON | `.json` | Harness compatibility aggregation |
+| `authorization_revocation` | JSON | `.json` | Interface recording Human Action or material Safety Guard |
+
+A type cannot select another format or extension. An extension/content-type mismatch is blocked. Markdown types use their registered Markdown Template when one exists and must expose future machine-verifiable immutable metadata. JSON types use their future Schema or, until that Schema is defined, the structured contract in this document; JSON has no Markdown co-canonical copy.
+
+### Path Derivation Ownership
+
+```text
+Skill
+  → emits registered Artifact type, logical ID, content, and subject binding
+  → does not emit target path or extension
+
+Interface / Persistence Orchestrator
+  → validates type and identifiers
+  → allocates the revision
+  → invokes Path Policy
+
+Path Policy
+  → derives one repository-relative path from the registered pattern
+
+Writer
+  → accepts only that derived path and performs create-only persistence
+```
+
+The canonical extension is derived from Artifact type, not accepted as a candidate choice. Paths are derived only from registered type, validated logical identity, Artifact revision, required subject identity/revision, and the type's fixed format. Workflow status, Decision disposition, Human name, free-form title, content hash, timestamp, current display name, and a Skill-provided `target_path` never participate in path derivation.
+
+### Directory Layout and Path Patterns
+
+The following patterns are canonical. Every shown path is relative to the repository and begins with `.codex/harness/development/artifacts/`.
+
+| Artifact type | Repository-relative path pattern |
+| --- | --- |
+| `adr` | `.codex/harness/development/artifacts/decisions/{logical_id}/r{artifact_revision}.md` |
+| `decision_record` | `.codex/harness/development/artifacts/decisions/{subject_decision_id}/records/record-r{artifact_revision}.json` |
+| `plan` | `.codex/harness/development/artifacts/plans/{logical_id}/r{artifact_revision}.md` |
+| `plan_review` | `.codex/harness/development/artifacts/plan-reviews/{subject_plan_id}/plan-r{subject_revision}/review-r{artifact_revision}.md` |
+| `design_review` | `.codex/harness/development/artifacts/design-reviews/{subject_plan_id}/plan-r{subject_revision}/review-r{artifact_revision}.md` |
+| `guardrail_validation` | `.codex/harness/development/artifacts/guardrail-validations/{subject_plan_id}/plan-r{subject_revision}/validation-r{artifact_revision}.json` |
+| `design_lock` | `.codex/harness/development/artifacts/design-locks/{subject_plan_id}/plan-r{subject_revision}/lock-r{artifact_revision}.md` |
+| `readiness_evidence` | `.codex/harness/development/artifacts/readiness/{subject_plan_id}/plan-r{subject_revision}/readiness-r{artifact_revision}.json` |
+| `implementation_review` | `.codex/harness/development/artifacts/implementation-reviews/{subject_implementation_id}/implementation-r{subject_revision}/review-r{artifact_revision}.md` |
+| `release_gate` | `.codex/harness/development/artifacts/release-gates/{subject_implementation_id}/implementation-r{subject_revision}/gate-r{artifact_revision}.md` |
+| `fix_request` | `.codex/harness/development/artifacts/fix-requests/{subject_implementation_id}/implementation-r{subject_revision}/request-r{artifact_revision}.json` |
+| `repository_publish_handoff` | `.codex/harness/development/artifacts/repository-publish-handoffs/{subject_implementation_id}/implementation-r{subject_revision}/handoff-r{artifact_revision}.json` |
+| `repository_publish_result` | `.codex/harness/development/artifacts/repository-publish-results/{subject_implementation_id}/implementation-r{subject_revision}/result-r{artifact_revision}.json` |
+| `authorization_grant` | `.codex/harness/development/artifacts/authorizations/{subject_plan_id}/plan-r{subject_revision}/grant-r{artifact_revision}.json` |
+| `authorization_continuation` | `.codex/harness/development/artifacts/authorizations/{subject_plan_id}/plan-r{subject_revision}/continuation-r{artifact_revision}.json` |
+| `authorization_revocation` | `.codex/harness/development/artifacts/authorizations/{subject_plan_id}/plan-r{subject_revision}/revocation-r{artifact_revision}.json` |
+
+Authorization types share the plan/revision directory and use distinct fixed filename prefixes. This keeps all authorization evidence for one Plan revision together without conflating grant, continuation, and revocation semantics. Their Artifact revision and authorization revision remain separate metadata domains even if their numeric values happen to match.
+
+The persistent top-level directories are therefore limited to:
+
+```text
+decisions/
+plans/
+plan-reviews/
+design-reviews/
+guardrail-validations/
+design-locks/
+readiness/
+implementation-reviews/
+release-gates/
+fix-requests/
+repository-publish-handoffs/
+repository-publish-results/
+authorizations/
+```
+
+No permanent `misc/`, `other/`, `temp/`, or status directory is permitted.
+
+For subject-scoped types, Path Policy fixes the logical series deterministically from type and subject identity; callers cannot create arbitrary parallel series. For example, all `plan_review` revisions for `main-plan` revision 4 belong to the single logical series derived as `plan-review:main-plan:r0004`, and all Decision Records for one Decision ID belong to its single `decision-record` series. The logical Artifact ID remains present in the Artifact Reference even where the path encodes it through the registered type and subject segments rather than a separate directory. This rule prevents two logical series from claiming the same canonical path.
+
+### Logical Artifact ID Policy
+
+All logical and subject IDs used in paths are ASCII lowercase and must match:
+
+```regex
+^[a-z0-9][a-z0-9-]{0,63}$
+```
+
+ADR IDs therefore use a normalized form such as `adr-0007`; uppercase `ADR-0007` is display metadata, not a path ID. IDs cannot contain `/`, `\`, `.`, `..`, whitespace, control characters, NUL, Unicode, Unicode confusables, percent-encoded separators, a leading or trailing hyphen, or more than 64 characters. In addition to the regular expression, a trailing hyphen and case-insensitive filesystem-reserved base names (`con`, `prn`, `aux`, `nul`, `com1` through `com9`, and `lpt1` through `lpt9`) are rejected.
+
+User input may propose a display title but is never copied into a logical ID. The responsible Interface selects or validates the ID under the registered Artifact-type contract.
+
+### Revision Path Representation
+
+Every Artifact and subject revision path token uses a lowercase `r` and at least four decimal digits:
+
+```regex
+r[0-9]{4,}
+```
+
+Examples are `r0001`, `r0002`, and `r10000`. Revisions are positive integers; `r0000`, signs, decimals, hexadecimal, and timestamps are invalid. The same representation is used for all Artifact types. A future implementation must reject values that cannot be represented safely rather than truncate or wrap them.
+
+### Status and Hash Separation
+
+Paths encode identity and revision, not status. `draft`, `accepted`, `rejected`, `deferred`, `blocked`, and `superseded` directories are prohibited. Status changes update State or an immutable Decision/Authorization record; they never move, rename, or copy a canonical Artifact.
+
+Content hashes also remain in Artifact References and immutable metadata, not paths:
+
+```yaml
+repository_path: .codex/harness/development/artifacts/plans/main-plan/r0004.md
+content_hash: sha256:...
+```
+
+This preserves readable, stable identity paths while hash verification detects content mismatch.
+
+### Fixed Paths and Convenience Views
+
+Fixed files such as `PLAN.md`, `DESIGN_LOCK.md`, `REVIEW.md`, and `RELEASE_GATE.md` are never canonical Artifact References. The initial implementation will not generate Convenience Views.
+
+A future Convenience View may be generated only from a canonical revisioned Artifact, must be reproducible, must state that it is non-canonical and manually uneditable, and must never bind State, Human Authorization, Review, Design Lock, Execute Handoff, or repository publication. View generation or refresh failure cannot corrupt canonical evidence and does not by itself invalidate an otherwise valid Workflow transition.
+
+Template paths are also not Artifact paths:
+
+```text
+.codex/harness/development/templates/PLAN.md
+≠ .codex/harness/development/artifacts/plans/main-plan/r0004.md
+```
+
+The existing `PLAN.md`, `DESIGN_LOCK.md`, `REVIEW.md`, and `RELEASE_GATE.md` Templates correspond to `plan`, `design_lock`, `implementation_review`, and `release_gate`. The current `REVIEW.md` is specifically an Implementation Review Template; it does not govern `plan_review` or `design_review`. Those two Markdown types require future type-specific structured Markdown contracts or Templates before persistence implementation. JSON types require their future JSON Schema.
+
+The current `ADR.md` Template contains a mutable-looking `status` field. Under this accepted policy, that field cannot serve as Human accept/reject/defer evidence or trigger a status-based path. Before ADR persistence is implemented, the Template contract must be aligned so Human disposition exists only in `decision_record`; this design commit does not modify the Template.
+
+### Current Reference Policy
+
+The filesystem has no canonical `current.json`, `latest` symlink, fixed-path copy, or other current pointer. Current Artifact References are owned only by the relevant Workflow State. Development Execution State keeps only its permitted downstream reference to Repository Publish Agent results; it does not absorb that Agent's publication State. This avoids a second mutable source of truth and prevents a filesystem pointer from diverging from State.
+
+### Symlink and Containment Policy
+
+String validation alone is insufficient. Before any future write, Path Policy and Writer contracts must require:
+
+1. resolve the real Repository Root;
+2. resolve Artifact Root and prove it is inside that Repository Root;
+3. reject Artifact Root if it is a symlink escaping the repository;
+4. walk every existing parent component without following a link outside Artifact Root;
+5. reject an existing target that is a symlink;
+6. derive and normalize the repository-relative path, then prove the resolved destination remains beneath the real Artifact Root; and
+7. perform the future create operation in a way that prevents a symlink swap between validation and creation.
+
+Writing through a symlink to another repository, a home directory, or any location outside Artifact Root is prohibited. Race-safe descriptor-relative creation is a future Writer implementation requirement; this decision fixes the fail-closed containment contract but does not implement it.
+
+### Git Management Policy
+
+Canonical Decision, Planning, Execution Evidence, and Authorization Artifacts under Artifact Root are Git-managed in the initial local single-repository model. This includes the downstream `repository_publish_result` Artifact while leaving its content and formal ownership with Repository Publish Agent.
+
+Temporary files, lock files, partial or failed writes, temporary scan results, raw source, secrets, credentials, private or personal information, complete conversations, complete Tool output, and unnecessary intermediate candidates must never be staged or committed. This decision does not modify `.gitignore`; future Writer storage for transient material must be outside canonical Artifact paths and comply with the security boundary before any Git operation.
+
+Retention, archive, and garbage-collection policy remain future decisions. Immutability does not authorize indefinite storage of prohibited data.
+
+### Artifact Type Registration Rule
+
+New Artifact types cannot be introduced by a Skill or free-form request. Adding a type requires one coordinated design and implementation change defining:
+
+- type name and classification;
+- purpose, content owner, persistence owner, and formal-adoption owner;
+- canonical format, extension, and content contract;
+- unique Path Policy pattern;
+- logical ID and revision model;
+- required subject binding;
+- canonicality and State-reference behavior;
+- Git and retention policy;
+- security and privacy requirements; and
+- enum, Path Policy, Schema, and tests.
+
+Registration must prove that its path cannot collide with an existing type. Until those elements are accepted together, the type is unknown and persistence fails closed.
+
 ## Status Update Owner Matrix
 
 | Status | Update owner | Condition |
@@ -583,7 +800,6 @@ The following remain future decisions:
 - required Artifact Write Request fields;
 - required Artifact Reference fields;
 - required Artifact Write Result fields;
-- Artifact type and Path Policy;
 - security scan ownership;
 - atomic Writer behavior;
 - State persistence;
@@ -598,7 +814,7 @@ The following remain future decisions:
 The next Artifact Persistence design decision is:
 
 ```text
-Artifact type and Path Policy
+Required fields for Write Request, Artifact Reference, and Write Result
 ```
 
-That decision must map each Artifact type and logical series to allowed repository-relative locations without changing the immutable revision model established here.
+That decision must carry the registered type, derived repository path, revision and stale-write preconditions, content identity, subject binding, and persistence outcome without reopening the ownership, authorization, revision, or Path Policy decisions established here.
