@@ -17,6 +17,7 @@ properties:
         - artifact_type
         - candidate_generators
         - artifact_lifecycle_statuses
+        - subject_binding_policy
         - canonicality
       properties:
         artifact_type:
@@ -33,6 +34,9 @@ properties:
           items:
             type: string
             enum: [candidate, draft, proposed, superseded]
+        subject_binding_policy:
+          type: string
+          enum: [required, optional]
         canonicality:
           type: object
           additionalProperties: false

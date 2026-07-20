@@ -4,6 +4,7 @@ artifact_types:
     artifact_type: adr
     candidate_generators: [{source_id: build-adr-candidates, source_version: "1.0"}]
     artifact_lifecycle_statuses: [draft, proposed, superseded]
+    subject_binding_policy: required
     canonicality:
       authority_types: [human_action]
       allowed_decisions: [accepted, rejected, deferred]
@@ -17,6 +18,7 @@ artifact_types:
     artifact_type: decision_record
     candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: optional
     canonicality: &not_applicable
       authority_types: [not_applicable]
       allowed_decisions: []
@@ -26,6 +28,7 @@ artifact_types:
     artifact_type: plan
     candidate_generators: [{source_id: assemble-plan, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: required
     canonicality:
       authority_types: [human_action]
       allowed_decisions: [accepted]
@@ -39,21 +42,25 @@ artifact_types:
     artifact_type: plan_review
     candidate_generators: [{source_id: review-plan, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: optional
     canonicality: *not_applicable
   design_review:
     artifact_type: design_review
     candidate_generators: [{source_id: design-implementation, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: optional
     canonicality: *not_applicable
   guardrail_validation:
     artifact_type: guardrail_validation
     candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: optional
     canonicality: *not_applicable
   design_lock:
     artifact_type: design_lock
     candidate_generators: [{source_id: lock-design, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: required
     canonicality:
       authority_types: [human_action]
       allowed_decisions: [locked]
@@ -67,11 +74,13 @@ artifact_types:
     artifact_type: readiness_evidence
     candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: optional
     canonicality: *not_applicable
   implementation_review:
     artifact_type: implementation_review
     candidate_generators: [{source_id: review-implementation, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: required
     canonicality:
       authority_types: [source_agent_decision]
       allowed_decisions: [accepted, changes_required, blocked]
@@ -85,6 +94,7 @@ artifact_types:
     artifact_type: release_gate
     candidate_generators: [{source_id: run-release-gate, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: required
     canonicality:
       authority_types: [workflow_guard]
       allowed_decisions: [passed, failed, blocked]
@@ -98,16 +108,19 @@ artifact_types:
     artifact_type: fix_request
     candidate_generators: [{source_id: execute-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: optional
     canonicality: *not_applicable
   repository_publish_handoff:
     artifact_type: repository_publish_handoff
     candidate_generators: [{source_id: create-repository-publish-handoff, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: optional
     canonicality: *not_applicable
   authorization_grant:
     artifact_type: authorization_grant
     candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: required
     canonicality:
       authority_types: [human_action]
       allowed_decisions: [granted]
@@ -121,6 +134,7 @@ artifact_types:
     artifact_type: authorization_continuation
     candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: required
     canonicality:
       authority_types: [workflow_guard]
       allowed_decisions: [continued]
@@ -134,6 +148,7 @@ artifact_types:
     artifact_type: authorization_revocation
     candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
+    subject_binding_policy: required
     canonicality:
       authority_types: [human_action, workflow_guard]
       allowed_decisions: [revoked]
