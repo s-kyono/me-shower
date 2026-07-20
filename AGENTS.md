@@ -64,6 +64,78 @@ Skill
 * `AGENTS.md`で明示的にルーティングされた独立Agentは、Harnessを経由せず直接呼び出してよい。
 * その他のAgentやSkillの直接呼び出しは、Harnessの開発、検証、デバッグ、またはユーザーが明示した一時手順に限る。
 
+## `.codex` Workspace Policy
+
+`.codex/`は、Codexの設定領域であると同時に、Harness、Interface、Skill、Schema、Template、Agent、設計文書、Artifactを管理するRepository内の作業領域として扱う。
+
+`.codex/`を、ディレクトリ名だけを理由にread-only、設定専用領域、または変更禁止領域として扱わない。
+
+AIエージェントは、現在の依頼、Plan、Design Lock、Harness Workflow、またはユーザーの明示的な指示によって変更対象となった場合、`.codex/`配下のファイルを作成、更新、削除できる。
+
+主な書込み対象には、次を含む。
+
+* `.codex/harness/`
+* `.codex/harness/**/docs/`
+* `.codex/harness/**/artifacts/`
+* `.codex/harness/**/interfaces/`
+* `.codex/harness/**/skills/`
+* `.codex/harness/**/schemas/`
+* `.codex/harness/**/templates/`
+* `.codex/agents/`
+
+`.codex/config.toml`もRepository管理対象だが、権限、sandbox、approval policyなどの実行環境設定を変更する場合は、ユーザーの明示的な指示を必要とする。
+
+Artifactの生成、更新、永続化は、対象HarnessのArtifact Persistence契約、Human Gate、Writer、Path Policyを優先する。
+
+`.codex/`が書込み可能であることだけを根拠に、Artifactを直接作成または更新してはならない。
+
+`.codex/`への書込み許可は、配下すべての変更許可を意味しない。
+
+AIエージェントは、現在の作業Scopeに含まれるファイルだけを変更する。
+
+次を禁止する。
+
+* Scope外の`.codex/`ファイルを便乗して変更する
+* 無関係な設定、Harness、Agent、Skill、Schema、Templateを修正する
+* 対象外ファイルをstage、unstage、削除、rename、commitする
+* パッチ操作の失敗だけを根拠に、`.codex/`全体を書込み不可と判断する
+* 実際のfilesystem確認を行わず、権限不足として処理を停止する
+* 書込み失敗を回避するためにRepository外へ複製し、別の正本を作成する
+
+書込み操作に失敗した場合は、次の順序で確認する。
+
+1. `pwd -P`でRepository Rootを確認する
+2. 対象PathがRepository Root配下へ解決されることを確認する
+3. `test -w <target>`または親directoryへの書込み可否を確認する
+4. symlink解決後もRepository Root外へ出ないことを確認する
+5. 使用した編集手段固有の失敗か、filesystemまたはsandboxによる拒否かを区別する
+6. 対象が書込み可能なら、通常のworkspace-safeな編集手段で再試行する
+7. 実際のfilesystemまたはsandboxが拒否した場合だけ安全停止する
+
+Codexセッションは、原則としてRepository内の`.codex/config.toml`で定義された設定を使用して起動する。
+
+想定する基本設定は次の通りとする。
+
+```toml
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+```
+
+セッション内で`/permissions`などを使用して実効権限を変更した場合、そのセッションでは`.codex/config.toml`と異なる権限が適用される可能性がある。
+
+権限に関する問題が発生した場合は、`/status`で現在の実効権限とDirectoryを確認し、設定ファイルの内容だけから実効状態を推測しない。
+
+書込み権限と変更Scopeは分離して扱う。
+
+```text
+書込み権限がある
+≠ 任意のファイルを変更してよい
+
+作業Scopeに含まれる
++ Harnessまたはユーザーから変更が認可されている
+= 変更可能
+```
+
 ## Harness Routing
 
 ### Development Harness
