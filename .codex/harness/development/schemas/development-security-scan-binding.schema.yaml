@@ -1,0 +1,38 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/development-security-scan-binding.schema.yaml"
+title: Development Security Scan Write Request Binding
+type: object
+additionalProperties: false
+required: [scan_evidence_id, scan_evidence_hash, scanned_payload_hash, security_policy_version, artifact_type_policy_version, scan_status, final_security_decision, human_review_binding]
+properties:
+  scan_evidence_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+  scan_evidence_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+  scanned_payload_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+  security_policy_version: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+  artifact_type_policy_version: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+  scan_status: {enum: [pass, review_required]}
+  final_security_decision: {enum: [automatic_pass, human_false_positive_confirmed]}
+  human_review_binding:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [state]
+        properties: {state: {const: not_required}}
+      - type: object
+        additionalProperties: false
+        required: [state, human_action_id, human_action_record_hash]
+        properties:
+          state: {const: required}
+          human_action_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+          human_action_record_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+allOf:
+  - if: {properties: {scan_status: {const: pass}}}
+    then:
+      properties:
+        final_security_decision: {const: automatic_pass}
+        human_review_binding: {properties: {state: {const: not_required}}}
+  - if: {properties: {scan_status: {const: review_required}}}
+    then:
+      properties:
+        final_security_decision: {const: human_false_positive_confirmed}
+        human_review_binding: {properties: {state: {const: required}}}

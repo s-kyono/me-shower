@@ -1,0 +1,30 @@
+security_policy_registry_schema_version: "1.0"
+accepted_security_policy_versions: [development-security-v1]
+allowed_scanners:
+  - {scanner_id: development-security-scanner, scanner_version: "1.0"}
+accepted_scan_evidence_schema_versions: ["1.0"]
+global_required_checks: [exact_payload, global_hard_block, raw_content]
+reason_code_vocabulary:
+  contextual_finding: {classification: contextual, allowed_scan_statuses: [review_required]}
+  credential_pattern_detected: {classification: hard_block, allowed_scan_statuses: [blocked]}
+  scanner_unavailable: {classification: operational_unknown, allowed_scan_statuses: [unknown]}
+  scanner_execution_failed: {classification: operational_unknown, allowed_scan_statuses: [unknown]}
+  policy_unknown: {classification: operational_unknown, allowed_scan_statuses: [unknown]}
+safe_location_policy_version: safe-location-v1
+policy_compatibility: {}
+artifact_type_policies:
+  adr: &markdown_policy {artifact_type_policy_version: artifact-security-v1, accepted_source_binding_variants: [generated_only, artifact_references, repository_snapshot], required_checks: [type_policy], contextual_review_categories: [contextual_finding], raw_content_policy: minimized_registered_fields_only, allowed_security_scan_field_paths: [[payload, title], [payload, summary]]}
+  decision_record: *markdown_policy
+  plan: {artifact_type_policy_version: artifact-security-v1, accepted_source_binding_variants: [generated_only, artifact_references, repository_snapshot], required_checks: [type_policy], contextual_review_categories: [contextual_finding], raw_content_policy: minimized_registered_fields_only, allowed_security_scan_field_paths: [[payload, title], [payload, summary], [payload, decisions]]}
+  plan_review: *markdown_policy
+  design_review: *markdown_policy
+  guardrail_validation: *markdown_policy
+  design_lock: *markdown_policy
+  readiness_evidence: *markdown_policy
+  implementation_review: *markdown_policy
+  release_gate: *markdown_policy
+  fix_request: *markdown_policy
+  repository_publish_handoff: *markdown_policy
+  authorization_grant: *markdown_policy
+  authorization_continuation: *markdown_policy
+  authorization_revocation: *markdown_policy

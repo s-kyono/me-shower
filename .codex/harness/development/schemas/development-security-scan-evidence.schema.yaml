@@ -1,0 +1,92 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/development-security-scan-evidence.schema.yaml"
+title: Development Security Scan Evidence
+type: object
+additionalProperties: false
+required: [scan_evidence_schema_version, scan_evidence_id, evidence_hash, scanner_id, scanner_version, security_policy_version, artifact_type_policy_version, artifact_type, logical_artifact_id, payload_hash, payload_format, source_binding, scan_status, completed_checks, reason_codes, safe_locations, review_requirement, scan_started_at, scan_completed_at]
+properties:
+  scan_evidence_schema_version: {const: "1.0"}
+  scan_evidence_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+  evidence_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+  scanner_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+  scanner_version: {type: string, pattern: '^[0-9]+\.[0-9]+(?:\.[0-9]+)?$'}
+  security_policy_version: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+  artifact_type_policy_version: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+  artifact_type: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+  logical_artifact_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+  payload_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+  payload_format: {enum: [markdown, yaml]}
+  source_binding: {$ref: "./source-binding.schema.yaml"}
+  scan_status: {enum: [pass, review_required, blocked, unknown]}
+  completed_checks:
+    type: array
+    minItems: 1
+    items:
+      type: object
+      additionalProperties: false
+      required: [check_id, completion_status]
+      properties:
+        check_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+        completion_status: {enum: [completed, not_completed, unknown]}
+  reason_codes:
+    type: array
+    uniqueItems: true
+    items: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+  safe_locations: {$ref: "#/$defs/safe_locations"}
+  review_requirement: {$ref: "#/$defs/review_requirement"}
+  scan_started_at: {type: string, format: date-time}
+  scan_completed_at: {type: string, format: date-time}
+$defs:
+  safe_locations:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [state]
+        properties: {state: {const: none}}
+      - type: object
+        additionalProperties: false
+        required: [state, locations]
+        properties:
+          state: {const: present}
+          locations:
+            type: array
+            minItems: 1
+            maxItems: 100
+            items:
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required: [location_type, section_id]
+                  properties: {location_type: {const: section_id}, section_id: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,63}$'}}
+                - type: object
+                  additionalProperties: false
+                  required: [location_type, field_path]
+                  properties:
+                    location_type: {const: field_path}
+                    field_path: {type: array, minItems: 1, maxItems: 16, items: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}}
+                - type: object
+                  additionalProperties: false
+                  required: [location_type, start_line, end_line]
+                  properties: {location_type: {const: line_range}, start_line: {type: integer, minimum: 1}, end_line: {type: integer, minimum: 1}}
+  review_requirement:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [state]
+        properties: {state: {const: not_required}}
+      - type: object
+        additionalProperties: false
+        required: [state, allowed_action_types, reason_codes]
+        properties:
+          state: {const: human_review_required}
+          allowed_action_types:
+            type: array
+            minItems: 3
+            maxItems: 3
+            uniqueItems: true
+            items: {enum: [false_positive_confirmed, candidate_revision_required, policy_decision_required]}
+          reason_codes:
+            type: array
+            minItems: 1
+            uniqueItems: true
+            items: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}

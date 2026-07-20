@@ -1,0 +1,90 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/development-security-policy-registry.schema.yaml"
+title: Development Security Policy Registry
+type: object
+additionalProperties: false
+required: [security_policy_registry_schema_version, accepted_security_policy_versions, allowed_scanners, accepted_scan_evidence_schema_versions, global_required_checks, reason_code_vocabulary, safe_location_policy_version, policy_compatibility, artifact_type_policies]
+properties:
+  security_policy_registry_schema_version: {const: "1.0"}
+  accepted_security_policy_versions:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+  allowed_scanners:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      type: object
+      additionalProperties: false
+      required: [scanner_id, scanner_version]
+      properties:
+        scanner_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+        scanner_version: {type: string, pattern: '^[0-9]+\.[0-9]+(?:\.[0-9]+)?$'}
+  accepted_scan_evidence_schema_versions:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items: {const: "1.0"}
+  global_required_checks: {$ref: "#/$defs/check_ids"}
+  reason_code_vocabulary:
+    type: object
+    minProperties: 1
+    propertyNames: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+    additionalProperties:
+      type: object
+      additionalProperties: false
+      required: [classification, allowed_scan_statuses]
+      properties:
+        classification: {enum: [contextual, hard_block, operational_unknown]}
+        allowed_scan_statuses:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {enum: [review_required, blocked, unknown]}
+  safe_location_policy_version: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+  policy_compatibility:
+    type: object
+    propertyNames: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+    additionalProperties:
+      type: object
+      additionalProperties: false
+      required: [disposition, additional_required_checks]
+      properties:
+        disposition: {enum: [accepted, additional_checks_required, rescan_required]}
+        additional_required_checks: {$ref: "#/$defs/check_ids"}
+  artifact_type_policies:
+    type: object
+    minProperties: 1
+    propertyNames: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+    additionalProperties:
+      type: object
+      additionalProperties: false
+      required: [artifact_type_policy_version, accepted_source_binding_variants, required_checks, contextual_review_categories, raw_content_policy, allowed_security_scan_field_paths]
+      properties:
+        artifact_type_policy_version: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+        accepted_source_binding_variants:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {enum: [generated_only, artifact_references, repository_snapshot]}
+        required_checks: {$ref: "#/$defs/check_ids"}
+        contextual_review_categories:
+          type: array
+          uniqueItems: true
+          items: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+        raw_content_policy: {enum: [prohibited, minimized_registered_fields_only]}
+        allowed_security_scan_field_paths:
+          type: array
+          uniqueItems: true
+          items:
+            type: array
+            minItems: 1
+            maxItems: 16
+            items: {type: string, pattern: '^[a-z][a-z0-9_]{0,63}$'}
+$defs:
+  check_ids:
+    type: array
+    uniqueItems: true
+    items: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
