@@ -1,3 +1,9 @@
+
 # プロジェクト内のファイル操作は自動許可
 approval_policy = "never"
 sandbox_mode = "workspace-write"
+
+# このRepository全体を明示的な書き込み対象にする
+sandbox_workspace_write.writable_roots = [
+  "/Users/s-kyono/projects/persol/me-shower",
+]
