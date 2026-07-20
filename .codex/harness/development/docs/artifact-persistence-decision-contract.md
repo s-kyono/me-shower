@@ -3,7 +3,7 @@
 ## Status
 
 - Decision status: accepted design decision
-- Scope: formal-adoption ownership, Human execution-authorization binding, immutable revision evidence, Artifact type-to-path policy, and persistence request/reference/result contracts for Development Harness artifacts
+- Scope: formal-adoption ownership, Human execution-authorization binding, immutable revision evidence, Artifact type-to-path policy, persistence request/reference/result contracts, and Artifact-first State consistency for Development Harness artifacts
 - Implementation status: contract only
 - Effective boundary: Artifact generation, persistence, and formal adoption are separate responsibilities
 
@@ -11,7 +11,7 @@ This contract uses **formal-adoption decision owner** instead of the less explic
 
 ## Scope
 
-This decision defines who may decide that an Artifact or Decision is formally adopted, how Plan readiness remains separate from Human implementation delegation, how revisioned evidence binds both decisions to the execution package, how each registered Artifact type maps to a safe repository path, and the required fields that cross the Artifact Persistence boundary.
+This decision defines who may decide that an Artifact or Decision is formally adopted, how Plan readiness remains separate from Human implementation delegation, how revisioned evidence binds both decisions to the execution package, how each registered Artifact type maps to a safe repository path, the required fields that cross the Artifact Persistence boundary, and how a verified Artifact Reference is reflected into Workflow State.
 
 It does not implement Path Policy, Schema files, atomic persistence, State persistence, or an Artifact Writer.
 
@@ -896,7 +896,7 @@ release_ready
 publish_succeeded
 ```
 
-The Writer does not know or decide these facts. A `written` or `already_written` result says nothing about whether State later references the Artifact. The update order, an unverified-write recovery classification, and the final transaction boundary remain deferred.
+The Writer does not know or decide these facts. A `written` or `already_written` result says nothing about whether State later references the Artifact. The Artifact-first update order is defined below; unreferenced-Artifact classification and recovery and the final transaction boundary remain deferred.
 
 ### Binding and Idempotency
 
@@ -949,7 +949,223 @@ Artifact Writer
   → does not change State
 ```
 
-The Persistence Orchestrator remains the existing allocation and coordination responsibility; this decision introduces no new owner. The lower-level call boundary between it and the Artifact Writer is not a fourth public contract and is deferred to implementation design. Neither component may decide formal adoption, Human authorization, Workflow transition, security-scan ownership, State update order, or orphan classification.
+The Persistence Orchestrator remains the existing allocation and coordination responsibility; this decision introduces no new owner. The lower-level call boundary between it and the Artifact Writer is not a fourth public contract and is deferred to implementation design. Neither component may decide formal adoption, Human authorization, Workflow transition, security-scan ownership, or unreferenced-Artifact classification.
+
+## Artifact-first State Consistency Model
+
+Artifact persistence and Workflow State mutation form an ordered two-result process. They are not one Writer operation and neither result implies the other.
+
+In Human terms:
+
+```text
+先に本を棚へ置く。
+実際に置けたことを確認してから、
+台帳へ登録する。
+```
+
+The reverse order is prohibited. State must never announce a current Artifact before that exact Artifact revision exists and has passed identity, path, byte, and hash verification.
+
+```text
+Artifact保存成功
+≠ State更新成功
+
+両方が成功して、初めて保存処理全体が完了する。
+```
+
+### Mandatory Update Order
+
+The update order is fixed as follows:
+
+```text
+Validate Write Request
+  → allocate Artifact revision
+  → persist Artifact with immutable create-only semantics
+  → verify persisted bytes, payload hash, content hash, and Path Policy
+  → generate the verified Artifact Reference
+  → return written or already_written Write Result
+  → validate State update preconditions
+  → apply that Artifact Reference to the exact State field
+  → re-read and verify the resulting State
+```
+
+No State mutation may occur when the Write Result is `blocked` or `failed`, when the Artifact Reference is missing, or before all Artifact verification completes. State-first reservation, placeholder Reference, pending path, predicted revision, and compensating creation after State mutation are prohibited.
+
+An `already_written` result enters the State phase with the same fully verified Artifact Reference as `written`; it does not allocate or persist another revision.
+
+### Three Completion Boundaries
+
+The following completion facts remain distinct:
+
+| Completion fact | Required meaning |
+| --- | --- |
+| Artifact write completed | Write Result is `written` or `already_written`; a complete Artifact Reference was returned; existence, exact bytes, hashes, format, subject binding, and derived Path Policy location were verified. State may still not contain the Reference. |
+| State reference update completed | All State compare-and-set preconditions passed; the exact target field contains the supplied Artifact Reference; the post-update State was re-read or equivalently verified. |
+| Workflow persistence completed | Both preceding facts are verified for the same Write Request, Write Result, Artifact Reference, target State identity, and target field. |
+
+Artifact write completion alone is never Workflow persistence completion. Sending a State update request, receiving a Tool success, starting an Agent, or obtaining an unverified State response is also insufficient. Unknown or contradictory State evidence fails closed.
+
+Write Result remains limited to Artifact persistence. It must not acquire `state_updated`, `workflow_completed`, `orphaned`, or any equivalent field. The Interface / Persistence Orchestrator keeps the Artifact Write Result and State update result as separate evidence and derives Workflow persistence completion only after both validate.
+
+### Required Validation Immediately Before State Update
+
+Immediately before State mutation, the Interface / Persistence Orchestrator must verify all of the following against current evidence rather than trusting the path inside the Reference:
+
+1. Write Result status is exactly `written` or `already_written`.
+2. `artifact_reference` is present and contains every required field under its supported Reference contract version.
+3. Write Result `request_id`, `idempotency_key`, and `request_fingerprint` match the verified Write Request.
+4. Reference type, logical ID, payload format, payload hash, and subject binding match the Write Request; its allocated revision and content hash match the verified Write Result outcome.
+5. The repository path re-derived from type, logical identity, revision, subject binding, format, and `path_policy_version` exactly equals `repository_path`.
+6. The resolved target exists beneath the real Artifact Root and passes containment, symlink, registered extension, and format checks.
+7. The exact stored bytes match `payload_hash`, and the reconstructed immutable envelope matches `content_hash`.
+8. The complete subject binding matches the current target State, bound Plan, and applicable authorization/readiness evidence.
+9. The target Workflow State identity, expected State revision, and expected State hash match the current State.
+10. The exact registered target field is authorized for the Artifact type and subject; a free-form or caller-selected State path is prohibited.
+11. The field's current Artifact Reference matches the explicit expected-current precondition.
+
+Failure, absence, staleness, or an unknown value in any check prevents mutation. A valid repository path alone cannot authorize State update, and identity must never be reconstructed from that path.
+
+### State Compare-and-set Preconditions
+
+Every State reference update requires one complete compare-and-set precondition set:
+
+```yaml
+state_update_precondition:
+  target_state_id: string
+  expected_state_revision: positive-integer
+  expected_state_hash: sha256:string
+  target_field: registered-field-identifier
+  expected_current_artifact_reference:
+    state: absent
+```
+
+or:
+
+```yaml
+state_update_precondition:
+  target_state_id: string
+  expected_state_revision: positive-integer
+  expected_state_hash: sha256:string
+  target_field: registered-field-identifier
+  expected_current_artifact_reference:
+    state: present
+    artifact_reference: object
+```
+
+All fields are mandatory. The `present` variant contains the complete expected Reference, not only a path, revision, or hash. The State mutation owner compares the current State identity, revision, deterministic State hash, target field, and complete current Reference. All must match in one compare-and-set-equivalent validation before applying the desired verified Reference.
+
+The State hash canonicalization and concrete Schema are implementation details deferred from this contract, but the chosen serialization must be deterministic and cover every State field whose change could affect the authorization or meaning of this update. An implementation may use an equivalent stronger primitive only if it proves the same conditions without weakening any comparison.
+
+If State revision or hash changed, the field contains a different Reference, an expected absence is no longer absent, or the target field is not the registered field, the State update is `blocked`. It must not overwrite, merge around, or silently accept the conflict. It must not delete, rewrite, rename, or move the already persisted Artifact to manufacture consistency. The Artifact remains immutable, and its classification or recovery remains deferred to the next decision.
+
+### State Update Result Semantics
+
+The State update result is separate from Write Result. Its conceptual outcomes are:
+
+| Outcome | Meaning |
+| --- | --- |
+| `applied` | Preconditions passed, the exact Reference was written to the target field, and post-update verification succeeded. |
+| `already_applied` | An idempotent replay of the same bound operation finds the exact complete Reference in the target field, and current subject, authorization, State integrity, and field invariants all verify; no mutation is needed. |
+| `blocked` | A precondition, target-field, current-Reference, binding, or State consistency check deterministically failed; State is not overwritten. |
+| `failed` | An eligible State operation encountered an execution failure and has not yet been resolved by mandatory re-read verification. It is not success. |
+
+These are design-level semantics, not a new Schema in this change. A State write acknowledgement alone cannot produce `applied`. The resulting State must be re-read or verified by an equivalent authoritative mechanism.
+
+When a State write reports an execution failure or its acknowledgement is lost, the Interface must re-read current State and classify only from verified evidence:
+
+- exact desired Reference present in the exact target field, the retry binds to the same original Write Request and State-update intent, and all current subject, authorization, State integrity, and field invariants still pass: `already_applied`;
+- original preconditions still hold and desired Reference is absent: `failed`, eligible for a controlled retry with the same Reference;
+- a different Reference or other precondition change is present: `blocked` conflict;
+- State cannot be read or its integrity cannot be established: unresolved `failed`, never success.
+
+This classification does not determine whether an unreferenced Artifact is an orphan or how it is recovered.
+
+### Failure Boundaries
+
+| Failure point | Artifact condition | State condition | Required handling |
+| --- | --- | --- | --- |
+| Before Artifact creation | Not created | Unchanged | Return `blocked` or `failed` as appropriate; do not enter State phase. |
+| During Artifact persistence | Not verified as canonical; partial or temporary material may exist | Unchanged | Never return a Reference or treat partial material as canonical. Atomic-write mechanics remain deferred. |
+| After Artifact verification and before State update | Verified immutable Artifact exists | Does not yet reference it | Do not report Workflow success. This possible unreferenced intermediate state is input to the next orphan-policy decision; this contract does not classify it. |
+| State compare-and-set mismatch | Verified immutable Artifact exists | Unchanged | State update is `blocked`; do not force overwrite or alter the Artifact. |
+| During State write | Verified immutable Artifact exists | Update outcome initially unknown or incomplete | Re-read and verify as defined above; unresolved evidence remains `failed`. |
+
+No failure after Artifact write completion authorizes deletion, overwrite, revision reuse, rename, or content modification as compensation. This contract fixes safety behavior without deciding retention, marker, reuse, or recovery policy.
+
+### Retry and Idempotency Across Both Phases
+
+Retry reuses the original Artifact identity and Reference:
+
+```text
+1. Verify the original Write Request identifiers and fingerprint.
+2. Resolve its verified Write Result and obtain the same Reference through already_written when necessary.
+3. Revalidate the Artifact and current State preconditions.
+4. If State lacks the Reference and all preconditions still match, retry only the State update with that same Reference.
+5. If State already holds that exact Reference, verify the original operation binding and all current invariants, then return already_applied.
+6. If State holds a different Reference or another precondition changed, return blocked and fail closed.
+```
+
+A State-only retry must not submit a new Write Request, allocate a new Artifact revision, change the idempotency binding, or mutate the existing Artifact. `already_written` is a valid Artifact write success for proceeding to State reflection. A failed or ambiguous State operation never makes a new Artifact revision the repair mechanism.
+
+### Responsibility Boundary for Artifact and State Consistency
+
+The existing responsibilities remain separated:
+
+```text
+Artifact Writer
+  → validates the trusted Artifact persistence input
+  → saves and verifies the immutable Artifact
+  → returns Artifact Reference and Write Result
+  → does not read or change Workflow State
+  → does not classify State update or Workflow completion
+
+Interface / Persistence Orchestrator
+  → receives and separately retains Write Result and State update result
+  → performs the required pre-State validation
+  → constructs the complete compare-and-set preconditions
+  → coordinates reflection of the verified Reference into the exact State field
+  → declares Workflow persistence completed only when both phases verify
+
+Responsible Plan or Execute Interface
+  → remains the existing mutation owner for its Workflow State
+  → validates compare-and-set preconditions and allowed State patch paths
+  → applies only the supplied verified Reference to the exact target field
+  → re-reads and validates the resulting State
+  → returns the separate State update result
+  → never saves, changes, deletes, renames, or repairs an Artifact
+```
+
+No independent State Writer is introduced because the existing Interfaces already own their respective Workflow State mutation boundaries. Skills and the Artifact Writer never mutate State. The Persistence Orchestrator coordinates the two phases but cannot bypass the responsible Interface's State invariants or allowed-path validation.
+
+### Persistence Success Invariant
+
+The success terms are fixed as:
+
+```text
+Artifact write success
+  = the Artifact is saved and fully verified, and its Reference is returned
+
+State update success
+  = State holds that exact Reference and post-update verification is complete
+
+Persistence success
+  = Artifact write success AND State update success for the same operation
+```
+
+Artifact success alone, a sent State request, an unknown State result, Writer success, Agent startup, or Tool execution success must never be reinterpreted as Persistence success or Workflow completion.
+
+### Deliberately Unresolved Follow-on Boundaries
+
+This consistency model intentionally establishes only that a verified Artifact may exist without a State Reference after interruption or conflict. It does not decide:
+
+- when such an Artifact is formally classified as an orphan;
+- orphan markers or State fields;
+- retention periods, automatic deletion, manual recovery, or reuse;
+- an orphan-recovery Agent or Skill;
+- Candidate security-scan ownership or its position before or after Artifact persistence;
+- filesystem locks or concrete atomic-write mechanics; or
+- a transaction implementation spanning Artifact and State.
+
+These unknowns cannot be inferred as successful, safe, or absent. The next decision receives the possible unreferenced intermediate state as an explicit input without changing the Artifact-first ordering established here.
 
 ## Status Update Owner Matrix
 
@@ -1062,9 +1278,8 @@ Future Workflow alignment must preserve this accepted ownership rule: Human Acti
 
 ## Decisions Intentionally Deferred
 
-The following remain future decisions:
+The following remain future decisions or implementations:
 
-- Artifact-first versus State-first update ordering;
 - orphan Artifact policy;
 - security scan ownership;
 - atomic Writer behavior;
@@ -1080,7 +1295,7 @@ The following remain future decisions:
 The next Artifact Persistence design decision is:
 
 ```text
-Security scan ownership
+Orphan acceptance, identification, and recovery policy
 ```
 
-That decision must not reopen the ownership, authorization, revision, Path Policy, or persistence boundary contract decisions established here. Artifact-versus-State update ordering, orphan policy, and the final transaction boundary remain deferred.
+That decision takes the possible unreferenced intermediate state as input and must not reopen the ownership, authorization, revision, Path Policy, persistence boundary contract, or Artifact-first State consistency decisions established here. Security-scan ownership and the final cross-resource transaction implementation remain deferred.
