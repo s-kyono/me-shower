@@ -12,11 +12,12 @@ import yaml
 from jsonschema import FormatChecker, ValidationError, validators
 from referencing import Registry, Resource
 
+from artifact_identity import MAX_REVISION, validate_revision_scoped_logical_id
+
 
 DEVELOPMENT_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = DEVELOPMENT_ROOT / "schemas"
 ARTIFACT_REGISTRY_PATH = DEVELOPMENT_ROOT / "shared/artifact-canonicality-registry.yaml"
-MAX_REVISION = 999_999_999
 FORBIDDEN_CANDIDATE_REVISION_FIELDS = {
     "revision", "artifact_revision", "new_artifact_revision",
     "target_artifact_revision", "revision_path_segment", "content_hash",
@@ -163,6 +164,25 @@ def _validate_binding(request: Mapping[str, Any], candidate: Mapping[str, Any], 
         or supplied["repository_snapshot_hash"] != subject.get("subject_hash")
     ):
         return "revision_binding_invalid"
+    path_policy = registry_entry.get("path_policy", {})
+    series_mode = path_policy.get("logical_series_identity")
+    if series_mode in {"subject_id", "subject_id_revision"}:
+        expected_subject_type = path_policy.get("subject_binding_variant")
+        if (
+            subject.get("binding_type") != "bound"
+            or subject.get("subject_type") != expected_subject_type
+            or not isinstance(subject.get("subject_id"), str)
+        ):
+            return "revision_series_identity_mismatch"
+        if series_mode == "subject_id_revision":
+            subject_revision = subject.get("subject_revision")
+            identity_matches = validate_revision_scoped_logical_id(
+                request.get("logical_artifact_id"), subject["subject_id"], subject_revision,
+            )
+        else:
+            identity_matches = request.get("logical_artifact_id") == subject["subject_id"]
+        if not identity_matches:
+            return "revision_series_identity_mismatch"
     return None
 
 

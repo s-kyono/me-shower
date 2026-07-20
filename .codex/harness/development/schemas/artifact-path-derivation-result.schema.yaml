@@ -1,0 +1,53 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/artifact-path-derivation-result.schema.yaml"
+title: "Immutable Artifact Path Derivation Result"
+type: object
+additionalProperties: false
+required:
+  - path_derivation_schema_version
+  - path_policy_version
+  - artifact_type
+  - logical_artifact_id
+  - logical_series
+  - artifact_revision
+  - subject_binding
+  - payload_format
+  - extension
+  - repository_path
+  - derivation_record_hash
+properties:
+  path_derivation_schema_version: {const: "1.0"}
+  path_policy_version: {const: path-policy-v1}
+  artifact_type: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+  logical_artifact_id: {$ref: "./artifact-path-derivation-request.schema.yaml#/$defs/path_id"}
+  logical_series:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [identity_type, logical_artifact_id]
+        properties:
+          identity_type: {const: logical_id}
+          logical_artifact_id: {$ref: "./artifact-path-derivation-request.schema.yaml#/$defs/path_id"}
+      - type: object
+        additionalProperties: false
+        required: [identity_type, subject_type, subject_id]
+        properties:
+          identity_type: {const: subject_id}
+          subject_type: {const: decision}
+          subject_id: {$ref: "./artifact-path-derivation-request.schema.yaml#/$defs/path_id"}
+      - type: object
+        additionalProperties: false
+        required: [identity_type, subject_type, subject_id, subject_revision]
+        properties:
+          identity_type: {const: subject_id_revision}
+          subject_type: {type: string, enum: [plan, implementation]}
+          subject_id: {$ref: "./artifact-path-derivation-request.schema.yaml#/$defs/path_id"}
+          subject_revision: {$ref: "./revision-domains.schema.yaml#/$defs/subject_revision"}
+  artifact_revision: {$ref: "./revision-domains.schema.yaml#/$defs/artifact_revision"}
+  subject_binding: {$ref: "./artifact-path-derivation-request.schema.yaml#/$defs/path_subject_binding"}
+  payload_format: {type: string, enum: [markdown, json]}
+  extension: {type: string, enum: [.md, .json]}
+  repository_path:
+    type: string
+    pattern: '^\.codex/harness/development/artifacts/[a-z0-9/._-]+$'
+  derivation_record_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}

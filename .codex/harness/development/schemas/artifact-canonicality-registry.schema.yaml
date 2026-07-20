@@ -3,7 +3,7 @@ $id: "https://me-shower.local/schemas/artifact-canonicality-registry.schema.yaml
 title: "Development Artifact Canonicality Registry"
 type: object
 additionalProperties: false
-required: [schema_version, revision_allocation, artifact_types]
+required: [schema_version, revision_allocation, path_policy, artifact_types]
 properties:
   schema_version:
     const: "1.0"
@@ -14,6 +14,17 @@ properties:
     properties:
       allowed_allocator:
         $ref: "./canonicality-common.schema.yaml#/$defs/source_identity"
+  path_policy:
+    type: object
+    additionalProperties: false
+    required: [artifact_root, accepted_versions]
+    properties:
+      artifact_root: {const: .codex/harness/development/artifacts}
+      accepted_versions:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: {const: path-policy-v1}
   artifact_types:
     type: object
     minProperties: 1
@@ -26,6 +37,7 @@ properties:
         - artifact_lifecycle_statuses
         - subject_binding_policy
         - revision_binding
+        - path_policy
         - canonicality
       properties:
         artifact_type:
@@ -78,6 +90,37 @@ properties:
                   - authorization_revision
                   - authorized_plan_revision
                   - authorized_plan_content_hash
+        path_policy:
+          type: object
+          additionalProperties: false
+          required: [classification, canonical_format, extension, path_pattern, path_pattern_contract, logical_id_policy, logical_series_identity, subject_binding_variant, path_policy_version]
+          properties:
+            classification: {type: string, enum: [decision_artifact, planning_artifact, execution_evidence]}
+            canonical_format: {type: string, enum: [markdown, json]}
+            extension: {type: string, enum: [.md, .json]}
+            path_pattern:
+              type: string
+              pattern: '^[a-z0-9{}/._-]+$'
+            path_pattern_contract:
+              type: object
+              additionalProperties: false
+              required: [required_tokens]
+              properties:
+                required_tokens:
+                  type: object
+                  minProperties: 2
+                  additionalProperties: false
+                  properties:
+                    logical_id: {const: 1}
+                    artifact_revision: {const: 1}
+                    subject_decision_id: {const: 1}
+                    subject_plan_id: {const: 1}
+                    subject_implementation_id: {const: 1}
+                    subject_revision: {const: 1}
+            logical_id_policy: {const: path-id-v1}
+            logical_series_identity: {type: string, enum: [logical_id, subject_id, subject_id_revision]}
+            subject_binding_variant: {type: string, enum: [none, decision, plan, implementation]}
+            path_policy_version: {const: path-policy-v1}
         canonicality:
           type: object
           additionalProperties: false

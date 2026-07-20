@@ -1,9 +1,13 @@
 schema_version: "1.0"
 revision_allocation:
   allowed_allocator: {source_id: persistence-orchestrator, source_version: "1.0"}
+path_policy:
+  artifact_root: .codex/harness/development/artifacts
+  accepted_versions: [path-policy-v1]
 artifact_types:
   adr:
     artifact_type: adr
+    path_policy: {classification: decision_artifact, canonical_format: markdown, extension: .md, path_pattern: "decisions/{logical_id}/{artifact_revision}.md", path_pattern_contract: {required_tokens: {logical_id: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: logical_id, subject_binding_variant: none, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: build-adr-candidates, source_version: "1.0"}]
     artifact_lifecycle_statuses: [draft, proposed, superseded]
     subject_binding_policy: required
@@ -22,6 +26,7 @@ artifact_types:
           allowed_decisions: [accepted, rejected, deferred]
   decision_record:
     artifact_type: decision_record
+    path_policy: {classification: decision_artifact, canonical_format: json, extension: .json, path_pattern: "decisions/{subject_decision_id}/records/record-{artifact_revision}.json", path_pattern_contract: {required_tokens: {subject_decision_id: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: subject_id, subject_binding_variant: decision, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: optional
@@ -36,6 +41,7 @@ artifact_types:
       contracts: []
   plan:
     artifact_type: plan
+    path_policy: {classification: planning_artifact, canonical_format: markdown, extension: .md, path_pattern: "plans/{logical_id}/{artifact_revision}.md", path_pattern_contract: {required_tokens: {logical_id: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: logical_id, subject_binding_variant: none, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: assemble-plan, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: required
@@ -54,6 +60,7 @@ artifact_types:
           allowed_decisions: [accepted]
   plan_review:
     artifact_type: plan_review
+    path_policy: {classification: planning_artifact, canonical_format: markdown, extension: .md, path_pattern: "plan-reviews/{subject_plan_id}/plan-{subject_revision}/review-{artifact_revision}.md", path_pattern_contract: {required_tokens: {subject_plan_id: 1, subject_revision: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: subject_id_revision, subject_binding_variant: plan, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: review-plan, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: optional
@@ -64,6 +71,7 @@ artifact_types:
     canonicality: *not_applicable
   design_review:
     artifact_type: design_review
+    path_policy: {classification: planning_artifact, canonical_format: markdown, extension: .md, path_pattern: "design-reviews/{subject_plan_id}/plan-{subject_revision}/review-{artifact_revision}.md", path_pattern_contract: {required_tokens: {subject_plan_id: 1, subject_revision: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: subject_id_revision, subject_binding_variant: plan, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: design-implementation, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: optional
@@ -71,6 +79,7 @@ artifact_types:
     canonicality: *not_applicable
   guardrail_validation:
     artifact_type: guardrail_validation
+    path_policy: {classification: planning_artifact, canonical_format: json, extension: .json, path_pattern: "guardrail-validations/{subject_plan_id}/plan-{subject_revision}/validation-{artifact_revision}.json", path_pattern_contract: {required_tokens: {subject_plan_id: 1, subject_revision: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: subject_id_revision, subject_binding_variant: plan, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: optional
@@ -78,6 +87,7 @@ artifact_types:
     canonicality: *not_applicable
   design_lock:
     artifact_type: design_lock
+    path_policy: {classification: planning_artifact, canonical_format: markdown, extension: .md, path_pattern: "design-locks/{subject_plan_id}/plan-{subject_revision}/lock-{artifact_revision}.md", path_pattern_contract: {required_tokens: {subject_plan_id: 1, subject_revision: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: subject_id_revision, subject_binding_variant: plan, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: lock-design, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: required
@@ -93,6 +103,7 @@ artifact_types:
           allowed_decisions: [locked]
   readiness_evidence:
     artifact_type: readiness_evidence
+    path_policy: {classification: planning_artifact, canonical_format: json, extension: .json, path_pattern: "readiness/{subject_plan_id}/plan-{subject_revision}/readiness-{artifact_revision}.json", path_pattern_contract: {required_tokens: {subject_plan_id: 1, subject_revision: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: subject_id_revision, subject_binding_variant: plan, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: optional
@@ -100,6 +111,7 @@ artifact_types:
     canonicality: *not_applicable
   implementation_review:
     artifact_type: implementation_review
+    path_policy: {classification: execution_evidence, canonical_format: markdown, extension: .md, path_pattern: "implementation-reviews/{subject_implementation_id}/implementation-{subject_revision}/review-{artifact_revision}.md", path_pattern_contract: {required_tokens: {subject_implementation_id: 1, subject_revision: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: subject_id_revision, subject_binding_variant: implementation, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: review-implementation, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: required
@@ -118,6 +130,7 @@ artifact_types:
           allowed_decisions: [accepted, changes_required, blocked]
   release_gate:
     artifact_type: release_gate
+    path_policy: {classification: execution_evidence, canonical_format: markdown, extension: .md, path_pattern: "release-gates/{subject_implementation_id}/implementation-{subject_revision}/gate-{artifact_revision}.md", path_pattern_contract: {required_tokens: {subject_implementation_id: 1, subject_revision: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: subject_id_revision, subject_binding_variant: implementation, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: run-release-gate, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: required
@@ -133,6 +146,7 @@ artifact_types:
           allowed_decisions: [passed, failed, blocked]
   fix_request:
     artifact_type: fix_request
+    path_policy: {classification: execution_evidence, canonical_format: json, extension: .json, path_pattern: "fix-requests/{subject_implementation_id}/implementation-{subject_revision}/request-{artifact_revision}.json", path_pattern_contract: {required_tokens: {subject_implementation_id: 1, subject_revision: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: subject_id_revision, subject_binding_variant: implementation, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: execute-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: optional
@@ -140,6 +154,7 @@ artifact_types:
     canonicality: *not_applicable
   repository_publish_handoff:
     artifact_type: repository_publish_handoff
+    path_policy: {classification: execution_evidence, canonical_format: json, extension: .json, path_pattern: "repository-publish-handoffs/{subject_implementation_id}/implementation-{subject_revision}/handoff-{artifact_revision}.json", path_pattern_contract: {required_tokens: {subject_implementation_id: 1, subject_revision: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: subject_id_revision, subject_binding_variant: implementation, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: create-repository-publish-handoff, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: optional
@@ -150,6 +165,7 @@ artifact_types:
     canonicality: *not_applicable
   authorization_grant:
     artifact_type: authorization_grant
+    path_policy: {classification: decision_artifact, canonical_format: json, extension: .json, path_pattern: "authorizations/{subject_plan_id}/plan-{subject_revision}/grant-{artifact_revision}.json", path_pattern_contract: {required_tokens: {subject_plan_id: 1, subject_revision: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: subject_id_revision, subject_binding_variant: plan, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: required
@@ -168,6 +184,7 @@ artifact_types:
           allowed_decisions: [granted]
   authorization_continuation:
     artifact_type: authorization_continuation
+    path_policy: {classification: decision_artifact, canonical_format: json, extension: .json, path_pattern: "authorizations/{subject_plan_id}/plan-{subject_revision}/continuation-{artifact_revision}.json", path_pattern_contract: {required_tokens: {subject_plan_id: 1, subject_revision: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: subject_id_revision, subject_binding_variant: plan, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: required
@@ -183,6 +200,7 @@ artifact_types:
           allowed_decisions: [continued]
   authorization_revocation:
     artifact_type: authorization_revocation
+    path_policy: {classification: decision_artifact, canonical_format: json, extension: .json, path_pattern: "authorizations/{subject_plan_id}/plan-{subject_revision}/revocation-{artifact_revision}.json", path_pattern_contract: {required_tokens: {subject_plan_id: 1, subject_revision: 1, artifact_revision: 1}}, logical_id_policy: path-id-v1, logical_series_identity: subject_id_revision, subject_binding_variant: plan, path_policy_version: path-policy-v1}
     candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
     artifact_lifecycle_statuses: [candidate, superseded]
     subject_binding_policy: required

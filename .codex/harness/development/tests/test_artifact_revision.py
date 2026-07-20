@@ -22,6 +22,7 @@ def load_module(name, path):
     return module
 
 
+identity = load_module("artifact_identity", ROOT / "shared/artifact_identity.py")
 revision = load_module("artifact_revision", ROOT / "shared/artifact_revision.py")
 adapter = load_module("artifact_revision_trusted_adapter", ROOT / "shared/artifact_revision_trusted_adapter.py")
 
@@ -30,11 +31,15 @@ NOW = "2026-07-20T10:00:00Z"
 ALLOCATOR = {"source_id": "persistence-orchestrator", "source_version": "1.0"}
 
 
-def candidate_factory(artifact_type="plan", logical_id="main-plan", candidate_revision=3):
+def candidate_factory(artifact_type="plan", logical_id=None, candidate_revision=3):
     subject_type = "implementation" if artifact_type in {"implementation_review", "release_gate", "fix_request"} else "plan"
     subject_id = "implementation-main" if subject_type == "implementation" else "main-plan"
     subject_revision = 2 if subject_type == "implementation" else 4
     subject_hash = HASH_C if subject_type == "implementation" else HASH_A
+    if logical_id is None:
+        logical_id = subject_id if artifact_type in {"decision_record"} else (
+            identity.build_revision_scoped_logical_id(subject_id, subject_revision) if artifact_type not in {"plan", "adr"} else "main-plan"
+        )
     return {
         "candidate_schema_version": "1.0", "candidate_id": f"{artifact_type}-candidate-1",
         "artifact_type": artifact_type, "logical_artifact_id": logical_id,
@@ -185,7 +190,7 @@ class ResolverProvenanceTests(unittest.TestCase):
 class BindingAndIdentityTests(unittest.TestCase):
     def test_complete_binding_variants_allocate(self):
         for artifact_type in ("plan", "design_lock", "implementation_review", "adr", "authorization_grant"):
-            candidate = candidate_factory(artifact_type, f"{artifact_type}-main")
+            candidate = candidate_factory(artifact_type)
             request = allocation_request_factory(candidate)
             self.assertEqual(allocate(candidate, request).status, "allocated")
 
@@ -194,7 +199,7 @@ class BindingAndIdentityTests(unittest.TestCase):
                  ("design_lock", "subject_content_hash"), ("implementation_review", "repository_snapshot_hash"),
                  ("adr", "decision_revision"), ("authorization_grant", "authorization_revision"))
         for artifact_type, field in cases:
-            candidate = candidate_factory(artifact_type, f"{artifact_type}-main")
+            candidate = candidate_factory(artifact_type)
             request = allocation_request_factory(candidate)
             del request["revision_binding"][field]
             request["allocation_request_fingerprint"] = revision.allocation_request_fingerprint(request)
@@ -205,11 +210,22 @@ class BindingAndIdentityTests(unittest.TestCase):
 
     def test_subject_binding_must_match_candidate(self):
         for artifact_type, field in (("design_lock", "subject_revision"), ("implementation_review", "implementation_revision")):
-            candidate = candidate_factory(artifact_type, f"{artifact_type}-main")
+            candidate = candidate_factory(artifact_type)
             request = allocation_request_factory(candidate)
             request["revision_binding"][field] += 1
             request["allocation_request_fingerprint"] = revision.allocation_request_fingerprint(request)
             self.assertEqual(allocate(candidate, request).reason_code, "revision_binding_invalid")
+
+    def test_subject_revision_series_cannot_reuse_an_unscoped_logical_id(self):
+        candidate = candidate_factory("design_lock")
+        candidate["logical_artifact_id"] = "main-plan"
+        request = allocation_request_factory(candidate)
+        self.assertEqual(allocate(candidate, request).reason_code, "revision_series_identity_mismatch")
+
+        candidate = candidate_factory("design_lock")
+        candidate["logical_artifact_id"] = "main-plan-r0005"
+        request = allocation_request_factory(candidate)
+        self.assertEqual(allocate(candidate, request).reason_code, "revision_series_identity_mismatch")
 
     def test_allocator_three_way_identity_and_version(self):
         malicious = {"source_id": "malicious-skill", "source_version": "1.0"}
