@@ -13,6 +13,10 @@ from jsonschema import FormatChecker, ValidationError, validators
 from referencing import Registry, Resource
 
 from artifact_identity import MAX_REVISION, validate_revision_scoped_logical_id
+from source_binding import (
+    SourceBindingAuthority, validate_candidate_source_binding_production,
+    validate_candidate_source_binding_with_authority,
+)
 
 
 DEVELOPMENT_ROOT = Path(__file__).resolve().parents[1]
@@ -50,7 +54,6 @@ class TrustedArtifactRevisionContext:
     def __post_init__(self) -> None:
         if self._adapter_token is not _ADAPTER_TOKEN:
             raise TypeError("trusted Artifact revision context must be adapter-issued")
-
 
 class TrustedArtifactRevisionResolver(ABC):
     @abstractmethod
@@ -97,7 +100,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 def _load_contracts() -> tuple[dict[str, Any], dict[str, Any]]:
     names = (
-        "revision-domains.schema.yaml", "canonicality-common.schema.yaml",
+        "revision-domains.schema.yaml", "canonicality-common.schema.yaml", "source-binding.schema.yaml",
         "artifact-candidate.schema.yaml", "artifact-revision-allocation-request.schema.yaml",
         "artifact-revision-allocation-record.schema.yaml", "artifact-revision-evidence.schema.yaml",
         "artifact-canonicality-registry.schema.yaml",
@@ -291,7 +294,10 @@ def _validate_context(context, artifact_type, logical_id, validators_by_name) ->
     return None
 
 
-def allocate_artifact_revision(candidate, allocation_request, revision_resolver):
+def _allocate_artifact_revision(
+    candidate, allocation_request, revision_resolver,
+    source_authority: SourceBindingAuthority | None = None,
+):
     forbidden = FORBIDDEN_CANDIDATE_REVISION_FIELDS.intersection(candidate)
     if forbidden:
         return _result("invalid", "candidate_artifact_revision_forbidden")
@@ -329,6 +335,13 @@ def allocate_artifact_revision(candidate, allocation_request, revision_resolver)
     context = _resolve_context(revision_resolver, artifact_type, logical_id, allocation_request["allocation_record_id"])
     if context is None:
         return _result("invalid", "revision_context_provenance_invalid")
+    source_result = (
+        validate_candidate_source_binding_with_authority(candidate, source_authority)
+        if source_authority is not None
+        else validate_candidate_source_binding_production(candidate)
+    )
+    if source_result.status != "valid":
+        return _result(source_result.status, source_result.reason_code)
     context_error = _validate_context(context, artifact_type, logical_id, schemas)
     if context_error:
         return _result("invalid", context_error)
@@ -391,3 +404,18 @@ def allocate_artifact_revision(candidate, allocation_request, revision_resolver)
     except ValidationError:
         return _result("invalid", "allocation_record_invalid")
     return _result("allocated", "artifact_revision_allocated", record)
+
+
+def allocate_artifact_revision(candidate, allocation_request, revision_resolver):
+    """Production entrypoint with internally fixed source provenance authority."""
+    return _allocate_artifact_revision(candidate, allocation_request, revision_resolver)
+
+
+def allocate_artifact_revision_for_test(
+    candidate, allocation_request, revision_resolver,
+    source_authority: SourceBindingAuthority,
+):
+    """Test-only composition entrypoint; never used by production interfaces."""
+    return _allocate_artifact_revision(
+        candidate, allocation_request, revision_resolver, source_authority,
+    )

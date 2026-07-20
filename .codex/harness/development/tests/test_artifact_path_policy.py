@@ -21,6 +21,7 @@ def load_module(name, path):
 
 
 identity = load_module("artifact_identity", ROOT / "shared/artifact_identity.py")
+source_binding = load_module("source_binding", ROOT / "shared/source_binding.py")
 revision = load_module("artifact_revision", ROOT / "shared/artifact_revision.py")
 policy = load_module("artifact_path_policy", ROOT / "shared/artifact_path_policy.py")
 HASH_A = "a" * 64

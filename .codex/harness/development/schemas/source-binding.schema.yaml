@@ -1,0 +1,88 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/source-binding.schema.yaml"
+title: "Development Artifact Candidate Source Binding"
+$defs:
+  path_id:
+    type: string
+    pattern: "^[a-z0-9][a-z0-9-]{0,63}$"
+  logical_series:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [identity_type, logical_artifact_id]
+        properties:
+          identity_type: {const: logical_id}
+          logical_artifact_id: {$ref: "#/$defs/path_id"}
+      - type: object
+        additionalProperties: false
+        required: [identity_type, subject_type, subject_id]
+        properties:
+          identity_type: {const: subject_id}
+          subject_type: {const: decision}
+          subject_id: {$ref: "#/$defs/path_id"}
+      - type: object
+        additionalProperties: false
+        required: [identity_type, subject_type, subject_id, subject_revision]
+        properties:
+          identity_type: {const: subject_id_revision}
+          subject_type: {type: string, enum: [plan, implementation]}
+          subject_id: {$ref: "#/$defs/path_id"}
+          subject_revision: {$ref: "./revision-domains.schema.yaml#/$defs/subject_revision"}
+  source_reference:
+    type: object
+    additionalProperties: false
+    required: [artifact_type, logical_artifact_id, logical_series, artifact_revision, content_hash]
+    properties:
+      artifact_type: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+      logical_artifact_id: {$ref: "#/$defs/path_id"}
+      logical_series: {$ref: "#/$defs/logical_series"}
+      artifact_revision: {$ref: "./revision-domains.schema.yaml#/$defs/artifact_revision"}
+      content_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+  repository_identity:
+    type: object
+    additionalProperties: false
+    required: [provider, repository_id]
+    properties:
+      provider: {type: string, enum: [github]}
+      repository_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+oneOf:
+  - type: object
+    additionalProperties: false
+    required: [source_binding_schema_version, binding_type, generator_identity, generator_execution_id, generation_input_fingerprint_schema_version, generation_input_policy_version, generation_input_domain, generation_input_fingerprint, source_binding_hash]
+    properties:
+      source_binding_schema_version: {const: "1.0"}
+      binding_type: {const: generated_only}
+      generator_identity: {$ref: "./canonicality-common.schema.yaml#/$defs/source_identity"}
+      generator_execution_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+      generation_input_fingerprint_schema_version: {const: "1.0"}
+      generation_input_policy_version: {const: generation-input-v1}
+      generation_input_domain: {const: development-artifact-generation-input}
+      generation_input_fingerprint: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+      source_binding_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+  - type: object
+    additionalProperties: false
+    required: [source_binding_schema_version, binding_type, generator_identity, generator_execution_id, source_references, source_reference_set_hash, source_binding_hash]
+    properties:
+      source_binding_schema_version: {const: "1.0"}
+      binding_type: {const: artifact_references}
+      generator_identity: {$ref: "./canonicality-common.schema.yaml#/$defs/source_identity"}
+      generator_execution_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+      source_references:
+        type: array
+        minItems: 1
+        items: {$ref: "#/$defs/source_reference"}
+      source_reference_set_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+      source_binding_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+  - type: object
+    additionalProperties: false
+    required: [source_binding_schema_version, binding_type, generator_identity, generator_execution_id, repository_identity, snapshot_kind, snapshot_policy_version, repository_snapshot_hash, source_binding_hash]
+    properties:
+      source_binding_schema_version: {const: "1.0"}
+      binding_type: {const: repository_snapshot}
+      generator_identity: {$ref: "./canonicality-common.schema.yaml#/$defs/source_identity"}
+      generator_execution_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+      repository_identity: {$ref: "#/$defs/repository_identity"}
+      snapshot_kind: {const: canonical_worktree_snapshot}
+      snapshot_policy_version: {const: repository-snapshot-v1}
+      repository_snapshot_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+      source_binding_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}

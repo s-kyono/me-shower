@@ -13,6 +13,11 @@ import yaml
 from jsonschema import FormatChecker, ValidationError, validators
 from referencing import Registry, Resource
 
+from source_binding import (
+    SourceBindingAuthority, validate_candidate_source_binding_production,
+    validate_candidate_source_binding_with_authority,
+)
+
 
 DEVELOPMENT_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = DEVELOPMENT_ROOT / "schemas"
@@ -82,7 +87,6 @@ class TrustedCanonicalityContext:
         if self._token is not _TRUST_TOKEN:
             raise TypeError("trusted canonicality context must be resolver-issued")
 
-
 class TrustedCanonicalityContextResolver(ABC):
     """Trusted adapter boundary for State, identity, and immutable record indexes."""
 
@@ -100,7 +104,8 @@ class TrustedCanonicalityContextResolver(ABC):
     def _mint_context(**facts: Any) -> TrustedCanonicalityContext:
         """Adapter-only constructor for facts obtained from trusted stores."""
         for name in (
-            "trusted_candidate_generator", "subject_binding", "verified_authority_source",
+            "trusted_candidate_generator", "subject_binding",
+            "verified_authority_source",
             "verified_actor_identity", "existing_decision_records",
             "existing_authority_records",
         ):
@@ -127,7 +132,8 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 def _load_validators() -> tuple[dict[str, Any], dict[str, Any]]:
     names = (
         "revision-domains.schema.yaml",
-        "canonicality-common.schema.yaml", "artifact-candidate.schema.yaml",
+        "canonicality-common.schema.yaml", "source-binding.schema.yaml",
+        "artifact-candidate.schema.yaml",
         "canonicality-authority-record.schema.yaml",
         "canonicality-decision-record.schema.yaml",
         "artifact-canonicality-registry.schema.yaml",
@@ -269,6 +275,7 @@ def _trusted_context_from_resolver(
 def _validate_candidate_with_context(
     candidate: Mapping[str, Any], payload_bytes: bytes | None,
     context: TrustedCanonicalityContext | None,
+    source_authority: SourceBindingAuthority | None = None,
 ) -> CanonicalityValidationResult:
     if payload_bytes is None or not isinstance(payload_bytes, bytes):
         return _result("invalid", "candidate_payload_required")
@@ -282,6 +289,13 @@ def _validate_candidate_with_context(
         schema_validators["artifact-candidate.schema.yaml"].validate(candidate)
     except (ValidationError, ValueError, OSError, yaml.YAMLError):
         return _result("invalid", "candidate_schema_invalid")
+    source_result = (
+        validate_candidate_source_binding_with_authority(candidate, source_authority)
+        if source_authority is not None
+        else validate_candidate_source_binding_production(candidate)
+    )
+    if source_result.status != "valid":
+        return _result(source_result.status, source_result.reason_code)
     if hashlib.sha256(payload_bytes).hexdigest() != candidate["payload_hash"]:
         return _result("blocked", "candidate_payload_hash_mismatch")
     try:
@@ -323,16 +337,28 @@ def validate_candidate(
     return _validate_candidate_with_context(candidate, payload_bytes, context)
 
 
-def validate_canonicality_authority(
+def validate_candidate_for_test(
+    candidate: Mapping[str, Any], payload_bytes: bytes | None,
+    context_resolver: TrustedCanonicalityContextResolver | Any,
+    source_authority: SourceBindingAuthority,
+) -> CanonicalityValidationResult:
+    context = _trusted_context_from_resolver(context_resolver, candidate.get("candidate_id", ""))
+    return _validate_candidate_with_context(candidate, payload_bytes, context, source_authority)
+
+
+def _validate_canonicality_authority(
     candidate: Mapping[str, Any], payload_bytes: bytes | None,
     decision_record: Mapping[str, Any], authority_record: Mapping[str, Any],
     context_resolver: TrustedCanonicalityContextResolver | Any,
+    source_authority: SourceBindingAuthority | None = None,
 ) -> CanonicalityValidationResult:
     authority_id = authority_record.get("authority_record_id", "")
     context = _trusted_context_from_resolver(
         context_resolver, candidate.get("candidate_id", ""), authority_id
     )
-    candidate_result = _validate_candidate_with_context(candidate, payload_bytes, context)
+    candidate_result = _validate_candidate_with_context(
+        candidate, payload_bytes, context, source_authority,
+    )
     if candidate_result.status != "valid":
         return candidate_result
     assert context is not None
@@ -443,4 +469,28 @@ def validate_canonicality_authority(
     return _result(
         "valid", "canonicality_authority_valid", decision=decision,
         record_id=decision_record["decision_record_id"],
+    )
+
+
+def validate_canonicality_authority(
+    candidate: Mapping[str, Any], payload_bytes: bytes | None,
+    decision_record: Mapping[str, Any], authority_record: Mapping[str, Any],
+    context_resolver: TrustedCanonicalityContextResolver | Any,
+) -> CanonicalityValidationResult:
+    """Production entrypoint with internally fixed source provenance authority."""
+    return _validate_canonicality_authority(
+        candidate, payload_bytes, decision_record, authority_record, context_resolver,
+    )
+
+
+def validate_canonicality_authority_for_test(
+    candidate: Mapping[str, Any], payload_bytes: bytes | None,
+    decision_record: Mapping[str, Any], authority_record: Mapping[str, Any],
+    context_resolver: TrustedCanonicalityContextResolver | Any,
+    source_authority: SourceBindingAuthority,
+) -> CanonicalityValidationResult:
+    """Test-only composition entrypoint; never used by production interfaces."""
+    return _validate_canonicality_authority(
+        candidate, payload_bytes, decision_record, authority_record,
+        context_resolver, source_authority,
     )

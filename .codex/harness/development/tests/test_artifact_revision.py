@@ -23,6 +23,7 @@ def load_module(name, path):
 
 
 identity = load_module("artifact_identity", ROOT / "shared/artifact_identity.py")
+source_binding = load_module("source_binding", ROOT / "shared/source_binding.py")
 revision = load_module("artifact_revision", ROOT / "shared/artifact_revision.py")
 adapter = load_module("artifact_revision_trusted_adapter", ROOT / "shared/artifact_revision_trusted_adapter.py")
 
@@ -40,13 +41,17 @@ def candidate_factory(artifact_type="plan", logical_id=None, candidate_revision=
         logical_id = subject_id if artifact_type in {"decision_record"} else (
             identity.build_revision_scoped_logical_id(subject_id, subject_revision) if artifact_type not in {"plan", "adr"} else "main-plan"
         )
+    generated_by = {"source_id": "assemble-plan", "source_version": "1.0"}
+    provenance = source_binding.build_generated_only_binding(
+        generated_by, f"{artifact_type}-execution-1", [HASH_D],
+    )
     return {
         "candidate_schema_version": "1.0", "candidate_id": f"{artifact_type}-candidate-1",
         "artifact_type": artifact_type, "logical_artifact_id": logical_id,
         "candidate_revision": candidate_revision, "artifact_lifecycle_status": "candidate",
         "payload_hash": HASH_B, "payload_format": "markdown",
         "subject_binding": {"binding_type": "bound", "subject_type": subject_type, "subject_id": subject_id, "subject_revision": subject_revision, "subject_hash": subject_hash},
-        "generated_by": {"source_id": "assemble-plan", "source_version": "1.0"},
+        "generated_by": generated_by, "source_binding": provenance,
     }
 
 
@@ -131,11 +136,36 @@ class ForgedResolver(revision.TrustedArtifactRevisionResolver):
         return self.context if hasattr(self, "context") else {}
 
 
+class TestSourceAuthority(source_binding.SourceBindingAuthority):
+    def __init__(self, candidate): self.record = deepcopy(candidate["source_binding"])
+    def supports_binding_type(self, binding_type): return binding_type == "generated_only"
+    def resolve_source_binding(self, generator_identity, generator_execution_id): return deepcopy(self.record)
+    def resolve_generation_execution_evidence(self, generator_identity, generator_execution_id):
+        return source_binding.GenerationExecutionEvidence(
+            deepcopy(generator_identity), generator_execution_id, "1.0",
+            "generation-input-v1", "development-artifact-generation-input", (HASH_D,),
+        )
+
+
+PRODUCTION_ALLOCATE = revision.allocate_artifact_revision
+
+
+def _allocate_for_test(candidate, request, resolver):
+    return revision.allocate_artifact_revision_for_test(
+        candidate, request, resolver, TestSourceAuthority(candidate),
+    )
+
+
+revision.allocate_artifact_revision = _allocate_for_test
+
+
 def allocate(candidate=None, request=None, resolver=None):
     candidate = candidate or candidate_factory()
     request = request or allocation_request_factory(candidate)
     if resolver is None:
-        resolver = production_adapter_fixture(artifact_type=candidate["artifact_type"], logical_id=candidate["logical_artifact_id"])
+        resolver = production_adapter_fixture(
+            artifact_type=candidate["artifact_type"], logical_id=candidate["logical_artifact_id"],
+        )
     return revision.allocate_artifact_revision(candidate, request, resolver)
 
 
@@ -173,6 +203,40 @@ class RevisionDomainTests(unittest.TestCase):
 
 
 class ResolverProvenanceTests(unittest.TestCase):
+    def test_caller_authored_binding_is_rejected_by_revision_context(self):
+        original = candidate_factory()
+        resolver = production_adapter_fixture(
+            artifact_type=original["artifact_type"], logical_id=original["logical_artifact_id"],
+        )
+        source_authority = TestSourceAuthority(original)
+        changed = deepcopy(original)
+        changed["source_binding"] = source_binding.build_generated_only_binding(
+            changed["generated_by"], changed["source_binding"]["generator_execution_id"], [HASH_A],
+        )
+        request = allocation_request_factory(changed)
+        self.assertEqual(
+            revision.allocate_artifact_revision_for_test(
+                changed, request, resolver, source_authority,
+            ).reason_code,
+            "source_binding_fingerprint_mismatch",
+        )
+
+    def test_production_entry_rejects_caller_snapshot_as_source_authority(self):
+        candidate = candidate_factory()
+        resolver = production_adapter_fixture(
+            artifact_type=candidate["artifact_type"], logical_id=candidate["logical_artifact_id"],
+        )
+        request = allocation_request_factory(candidate)
+        self.assertEqual(
+            PRODUCTION_ALLOCATE(candidate, request, resolver).reason_code,
+            "source_binding_production_authority_required",
+        )
+        with self.assertRaises(TypeError):
+            adapter.VerifiedRevisionStoreSnapshot(
+                "plan", "main-plan", "absent", None, None, frozenset(), {}, {},
+                ALLOCATOR, NOW, candidate["source_binding"],
+            )
+
     def test_base_resolver_has_no_mint_helper(self):
         self.assertFalse(hasattr(revision.TrustedArtifactRevisionResolver, "_mint_context"))
 

@@ -14,6 +14,7 @@ required:
   - payload_format
   - subject_binding
   - generated_by
+  - source_binding
 properties:
   candidate_schema_version:
     const: "1.0"
@@ -37,3 +38,5 @@ properties:
     $ref: "./canonicality-common.schema.yaml#/$defs/subject_binding"
   generated_by:
     $ref: "./canonicality-common.schema.yaml#/$defs/source_identity"
+  source_binding:
+    $ref: "./source-binding.schema.yaml"

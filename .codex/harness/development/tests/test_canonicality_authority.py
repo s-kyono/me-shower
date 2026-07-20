@@ -12,6 +12,20 @@ from jsonschema import validators
 
 
 ROOT = Path(__file__).resolve().parents[1]
+IDENTITY_SPEC = importlib.util.spec_from_file_location(
+    "artifact_identity", ROOT / "shared/artifact_identity.py"
+)
+artifact_identity = importlib.util.module_from_spec(IDENTITY_SPEC)
+assert IDENTITY_SPEC.loader is not None
+sys.modules[IDENTITY_SPEC.name] = artifact_identity
+IDENTITY_SPEC.loader.exec_module(artifact_identity)
+SOURCE_SPEC = importlib.util.spec_from_file_location(
+    "source_binding", ROOT / "shared/source_binding.py"
+)
+source_binding = importlib.util.module_from_spec(SOURCE_SPEC)
+assert SOURCE_SPEC.loader is not None
+sys.modules[SOURCE_SPEC.name] = source_binding
+SOURCE_SPEC.loader.exec_module(source_binding)
 SPEC = importlib.util.spec_from_file_location(
     "canonicality_authority", ROOT / "shared/canonicality_authority.py"
 )
@@ -53,6 +67,10 @@ def subject(subject_type: str = "plan", revision: int = 4, digest: str = HASH_A)
 def candidate_factory(artifact_type: str = "plan", payload: bytes | None = None):
     generator, lifecycle, *_, subject_type = CASES[artifact_type]
     exact_payload = payload if payload is not None else payload_for(artifact_type)
+    generated_by = {"source_id": generator, "source_version": "1.0"}
+    provenance = source_binding.build_generated_only_binding(
+        generated_by, f"{artifact_type.replace('_', '-')}-execution-1", [HASH_C],
+    )
     return {
         "candidate_schema_version": "1.0",
         "candidate_id": f"{artifact_type.replace('_', '-')}-candidate-1",
@@ -63,7 +81,8 @@ def candidate_factory(artifact_type: str = "plan", payload: bytes | None = None)
         "payload_hash": hashlib.sha256(exact_payload).hexdigest(),
         "payload_format": "markdown",
         "subject_binding": subject(subject_type),
-        "generated_by": {"source_id": generator, "source_version": "1.0"},
+        "generated_by": generated_by,
+        "source_binding": provenance,
     }
 
 
@@ -123,6 +142,43 @@ class FixtureResolver(canonicality.TrustedCanonicalityContextResolver):
 
     def resolve_canonicality(self, candidate_id, authority_record_id):
         return self.canonical_context
+
+
+class TestSourceAuthority(source_binding.SourceBindingAuthority):
+    def __init__(self, candidate):
+        self.record = deepcopy(candidate["source_binding"])
+
+    def supports_binding_type(self, binding_type):
+        return binding_type == "generated_only"
+
+    def resolve_source_binding(self, generator_identity, generator_execution_id):
+        return deepcopy(self.record)
+
+    def resolve_generation_execution_evidence(self, generator_identity, generator_execution_id):
+        return source_binding.GenerationExecutionEvidence(
+            deepcopy(generator_identity), generator_execution_id, "1.0",
+            "generation-input-v1", "development-artifact-generation-input", (HASH_C,),
+        )
+
+
+PRODUCTION_VALIDATE_CANDIDATE = canonicality.validate_candidate
+PRODUCTION_VALIDATE_CANONICALITY = canonicality.validate_canonicality_authority
+
+
+def _validate_candidate_for_test(candidate, payload, resolver):
+    return canonicality.validate_candidate_for_test(
+        candidate, payload, resolver, TestSourceAuthority(candidate),
+    )
+
+
+def _validate_canonicality_for_test(candidate, payload, decision, authority, resolver):
+    return canonicality.validate_canonicality_authority_for_test(
+        candidate, payload, decision, authority, resolver, TestSourceAuthority(candidate),
+    )
+
+
+canonicality.validate_candidate = _validate_candidate_for_test
+canonicality.validate_canonicality_authority = _validate_canonicality_for_test
 
 
 def trusted_context_factory(
@@ -264,6 +320,34 @@ class PayloadValidationTests(unittest.TestCase):
 
 
 class TrustedContextAndGeneratorTests(unittest.TestCase):
+    def test_caller_authored_binding_is_rejected_by_trusted_candidate_context(self):
+        _, payload, candidate, authority, _, _ = valid_case("plan")
+        resolver = trusted_context_factory(
+            "plan", candidate, authority_hash=authority["authority_record_hash"],
+        )
+        source_authority = TestSourceAuthority(candidate)
+        candidate["source_binding"] = source_binding.build_generated_only_binding(
+            candidate["generated_by"], candidate["source_binding"]["generator_execution_id"], [HASH_A],
+        )
+        self.assertEqual(
+            canonicality.validate_candidate_for_test(
+                candidate, payload, resolver, source_authority,
+            ).reason_code,
+            "source_binding_fingerprint_mismatch",
+        )
+
+    def test_production_entry_rejects_test_authority_and_caller_context_binding(self):
+        payload = payload_for("plan")
+        candidate = candidate_factory("plan", payload)
+        authority = authority_record_factory(candidate)
+        resolver = trusted_context_factory(
+            "plan", candidate, authority_hash=authority["authority_record_hash"],
+        )
+        self.assertEqual(
+            PRODUCTION_VALIDATE_CANDIDATE(candidate, payload, resolver).reason_code,
+            "source_binding_production_authority_required",
+        )
+
     def test_raw_mapping_is_not_a_trusted_context(self):
         payload = payload_for("plan")
         candidate = candidate_factory("plan", payload)
@@ -455,6 +539,10 @@ class SafetyRegressionTests(unittest.TestCase):
         payload = payload_for("plan")
         candidate = candidate_factory("plan", payload)
         candidate["generated_by"] = {"source_id": "artifact-writer", "source_version": "1.0"}
+        candidate["source_binding"] = source_binding.build_generated_only_binding(
+            candidate["generated_by"], candidate["source_binding"]["generator_execution_id"],
+            [HASH_C],
+        )
         authority = authority_record_factory(candidate)
         resolver = trusted_context_factory(
             "plan", candidate, authority_hash=authority["authority_record_hash"],

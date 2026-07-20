@@ -1766,6 +1766,289 @@ Candidate persistence is prohibited when any of the following holds:
 
 Failure never authorizes placement of Candidate bytes, temporary scan files, review copies, or logs beneath Artifact Root. Pre-scan Candidate holding and quarantine implementation remain outside this design; Artifact Root is not a staging area.
 
+### Implementation-ready Security Contract Decisions
+
+The following decisions close the contract questions that must be settled before Security Schemas or Runtime are implemented. They refine, and do not replace, the ownership, evidence, Human Review, and Write Request rules above.
+
+#### Adopted implementation boundary
+
+The adopted boundary is **Interface-first**. The next implementation may define the source-binding Schema, Security Policy Registry, Scan Evidence Schema, Human Review Schema, Write Request Security Binding Schema, trusted Scanner interface, and validators. It must not select or implement a secret-detection engine, regular-expression set, entropy detector, remote product, Scan Skill, or retry constant as part of that work. A concrete Scanner requires a later accepted decision that versions its detection behavior, false-positive behavior, synthetic fixtures, and policy compatibility.
+
+The rejected alternative is a minimally specified local Scanner. Even a small Scanner would silently make detection rules and false-positive semantics part of the security boundary without an accepted versioned engine decision. A three-classification model is also rejected: `review_required` and `unknown` remain independent fail-closed facts and `invalid` remains a validator result, never scan evidence classification.
+
+The previously unresolved questions and their adopted decisions are:
+
+| Question | Adopted decision |
+| --- | --- |
+| Security classification | Preserve the exclusive four-status model; Schema or integrity failure is a validator result |
+| Final decision | Keep only the two existing eligibility decisions and generate neither for ineligible evidence |
+| Evidence shape and canonicalization | Fix the exact closed Record, deterministic list ordering, and hash envelope below |
+| Source provenance | Add a distinct hashed `source_binding`; require but do not equate it with `generated_by` |
+| Type-policy ownership | Use a Harness-owned Security Registry keyed by the existing closed Artifact Type identifiers |
+| Human Review | Reuse the existing immutable Human Action Record and bind it to exact evidence and payload |
+| Scanner trust | Use an interface-only Scanner plus composition-root-installed opaque adapter attestation |
+| Scanner engine and rules | Defer to a separate accepted implementation decision |
+
+Rejected alternatives are:
+
+- merging `review_required` into `blocked`, or treating `unknown` as a retryable allow state;
+- adding `invalid` as persisted scan classification;
+- converting `blocked` or `unknown` through Human confirmation;
+- treating Candidate `generated_by` as complete source provenance;
+- merging global Security Policy and Artifact type-policy versions;
+- merging Scan Evidence, Human Action, and Write Request Security Binding into one mutable Record;
+- adding duplicated Candidate or Scanner fields or a redundant hash to the exact Write Request Security Binding;
+- selecting a minimally specified detection engine or rule set during Schema work; and
+- placing security tracing in Artifact Reference rather than resolving evidence through the Write Request and Writer boundary.
+
+#### Exclusive classification and disposition matrix
+
+| `scan_status` | Scanner may return it | Human Review | Write Request Security Binding | `final_security_decision` | Retry and fail-closed treatment |
+| --- | --- | --- | --- | --- | --- |
+| `pass` | Yes, only after every applicable required check completed | Not required | Eligible when evidence, policy compatibility, source binding, and Candidate binding validate | `automatic_pass` | No identical rescan; reuse valid evidence for the same payload and accepted policy versions |
+| `review_required` | Yes, only after every applicable required check completed and only for contextual findings allowed by type policy | Required before eligibility | Ineligible until an exact-evidence, exact-payload `false_positive_confirmed` Record validates | `human_false_positive_confirmed` only after that Record; otherwise absent | Human action is required; unchanged evidence is not rescanned merely to seek a different result |
+| `blocked` | Yes, only for a closed hard-block or definite prohibited-content reason | Cannot override | Never generated | Absent | Save is prohibited; only changed Candidate bytes under a new hash may be rescanned |
+| `unknown` | Yes, for execution, support, policy, completeness, timeout, or integrity uncertainty | Cannot convert it to eligibility | Never generated | Absent | Fail closed; bounded operational retry is allowed only under durable policy-controlled tracking |
+
+`final_security_decision` is an eligibility derivation, not a second four-way scan classification. Its closed vocabulary is exactly `automatic_pass` and `human_false_positive_confirmed`. There is no `allow`, `block`, `rejected`, or unresolved value in a Write Request binding. A rejected Review, `candidate_revision_required`, `policy_decision_required`, `blocked`, `unknown`, invalid evidence, or unresolved `review_required` produces no Security Binding and no final decision.
+
+#### Security Policy Registry ownership and exact contract
+
+The Development Harness owns a dedicated closed Security Policy Registry. It is separate from the canonicality metadata while using the same closed Artifact Type identifiers. Its top-level contract contains exactly:
+
+```yaml
+security_policy_registry_schema_version: "1.0"
+accepted_security_policy_versions: [string]
+allowed_scanners:
+  - scanner_id: string
+    scanner_version: string
+accepted_scan_evidence_schema_versions: [string]
+global_required_checks: [check_id]
+reason_code_vocabulary:
+  reason_code:
+    classification: contextual | hard_block | operational_unknown
+    allowed_scan_statuses: [review_required | blocked | unknown]
+safe_location_policy_version: string
+policy_compatibility:
+  prior_security_policy_version:
+    disposition: accepted | additional_checks_required | rescan_required
+    additional_required_checks: [check_id]
+artifact_type_policies:
+  artifact_type:
+    artifact_type_policy_version: string
+    accepted_source_binding_variants: [generated_only | artifact_references | repository_snapshot]
+    required_checks: [check_id]
+    contextual_review_categories: [reason_code]
+    raw_content_policy: prohibited | minimized_registered_fields_only
+```
+
+All mappings are closed and all lists are duplicate-free. Check identifiers and reason codes are closed registry values, not free-form Scanner output. Effective required checks are the duplicate-free union of `global_required_checks`, the selected type policy's `required_checks`, and any compatibility-required checks. An unregistered Artifact type, absent type policy, unknown version, ambiguous compatibility entry, unknown reason code, or unknown Scanner fails closed.
+
+The global `security_policy_version` governs hard blocks, global required checks, Scanner acceptance, safe-location rules, and compatibility. Each `artifact_type_policy_version` governs type-specific allowed provenance variants, additional checks, contextual-review categories, registered-field allowances, minimization, and raw-content treatment. They remain separate versions because a type-policy change must not silently redefine global hard blocks, and a global emergency revocation must not require unrelated type versions to be renumbered.
+
+#### Source binding contract
+
+`generated_by` and `source_binding` are distinct. `generated_by` identifies the registered Skill or Interface execution identity that produced the Candidate. `source_binding` proves which safe, immutable provenance facts that execution used. The source binding's `generator_identity` must exactly equal Candidate `generated_by`, but neither Record substitutes for the other.
+
+Every source binding begins with these fields and has no additional properties outside its selected variant:
+
+```yaml
+source_binding_schema_version: "1.0"
+binding_type: generated_only | artifact_references | repository_snapshot
+generator_identity:
+  source_id: string
+  source_version: string
+generator_execution_id: string
+source_binding_hash: sha256:string
+```
+
+The variant-specific fields are exactly:
+
+```yaml
+# generated_only
+generation_input_fingerprint_schema_version: "1.0"
+generation_input_policy_version: generation-input-v1
+generation_input_domain: development-artifact-generation-input
+generation_input_fingerprint: sha256:string
+
+# artifact_references
+source_references:
+  - artifact_type: registered-type
+    logical_artifact_id: string
+    logical_series:
+      identity_type: logical_id | subject_id | subject_id_revision
+      # closed variant fields required by the selected identity_type
+    artifact_revision: positive-integer
+    content_hash: sha256:string
+source_reference_set_hash: sha256:string
+
+# repository_snapshot
+repository_identity:
+  provider: github
+  repository_id: stable-registered-id
+snapshot_kind: canonical_worktree_snapshot
+snapshot_policy_version: repository-snapshot-v1
+repository_snapshot_hash: sha256:string
+```
+
+`source_binding_hash` is SHA-256 of canonical JSON for the complete binding excluding that field. `generation_input_fingerprint` is SHA-256 of a versioned, domain-separated canonical envelope containing the fingerprint Schema version, policy version, fixed domain, generator identity, generator execution ID, and the sorted hashes of registered safe immutable inputs. It never hashes a caller-supplied fingerprint as evidence and never retains or enables reconstruction of raw Prompt, raw source, private material, complete Tool output, environment content, or payload copies.
+
+Each source Artifact Reference carries the complete closed Path Policy `logical_series`. Its immutable identity is `(artifact_type, logical_series, artifact_revision)`; `logical_artifact_id` must agree with that series. `content_hash` authenticates that identity but is not part of its duplicate key. The same identity and hash repeated is a duplicate, while the same identity with a different hash is an integrity conflict. References are sorted by immutable identity with logical ID and content hash only as deterministic tie-breakers. `source_reference_set_hash` commits only to this canonical Reference set so later evidence can compare the input set independently; `source_binding_hash` additionally commits to the generator, execution, and binding variant.
+
+A repository snapshot is identified by the complete tuple `(repository_identity, snapshot_kind, snapshot_policy_version, repository_snapshot_hash)`. Repository identity is a closed stable provider identifier, never a local or absolute path, display name, branch name, or unvalidated remote URL. The initial registered kind is `canonical_worktree_snapshot`; other snapshot kinds remain unsupported until their canonical hash policy is accepted.
+
+A hash is necessary but not sufficient provenance. Structural validation checks Schema, canonical ordering, conflicts, and integrity. Separate authority validation resolves `(generator_identity, generator_execution_id)` through the composition-root-installed execution index and requires byte-for-byte equality with exactly one immutable source binding. Reusing that execution identity with the same binding is idempotent; rebinding it to a different binding is rejected. Caller-authored mappings, caller-installed stores, and arbitrary resolver subclasses are not production authority. Until the formal Artifact Reference resolver and snapshot producer are installed, their production variants fail closed even though their structural Schemas exist.
+
+Production Candidate validation never accepts an authority argument. It closes over the exact authority installed by the production composition root. A separate internal/test validation entrypoint may accept a test authority implementing the same comparison contract, but that entrypoint is not callable by a production Interface and cannot establish production trust. The in-memory execution index is a single-threaded test utility only; production uniqueness belongs to the installed durable execution store contract.
+
+For `generated_only`, the installed authority resolves safe execution evidence containing the fingerprint Schema version, policy version, fixed domain, generator identity, generator execution ID, and duplicate-free safe immutable input hashes. The validator canonicalizes those hashes and recomputes `generation_input_fingerprint`; a completed fingerprint string without that evidence is insufficient. Canonicality and Revision resolve source provenance through this independent authority and do not accept a binding copied into their own caller-supplied context or snapshot as source authority.
+
+The Python object boundary does not claim tamper resistance after an attacker already has arbitrary code execution in the same interpreter. Class monkey patching, `object.__setattr__` against private fields, and direct mutation of module globals are outside this contract's threat model. Public API injection, arbitrary subclasses, caller-authored contexts or snapshots, caller-created indexes, and caller-supplied fingerprints remain within scope and must fail closed.
+
+Candidate Schema implementation adds the complete `source_binding`. Scan Request, Scan Evidence, and Write Request carry the same binding byte-for-byte after independent Schema and integrity validation. Candidate `generated_by` equals `source_binding.generator_identity`; Scan Evidence never derives one from the other or accepts a caller-authored provenance claim as trusted execution evidence.
+
+#### Exact Scan Evidence Record shape
+
+Every immutable evidence record has exactly these top-level fields and `additionalProperties: false`:
+
+```yaml
+scan_evidence_schema_version: "1.0"
+scan_evidence_id: string
+evidence_hash: sha256:string
+scanner_id: string
+scanner_version: string
+security_policy_version: string
+artifact_type_policy_version: string
+artifact_type: registered-type
+logical_artifact_id: string
+payload_hash: sha256:string
+payload_format: registered-format
+source_binding: source-binding-object
+scan_status: pass | review_required | blocked | unknown
+completed_checks:
+  - check_id: registered-check-id
+    completion_status: completed | not_completed | unknown
+reason_codes: [registered-safe-reason-code]
+safe_locations:
+  state: none
+  # or state: present with locations as defined below
+review_requirement:
+  state: not_required
+  # or state: human_review_required with allowed actions and reasons
+scan_started_at: trusted-date-time
+scan_completed_at: trusted-date-time
+```
+
+`evidence_hash` covers canonical JSON for every field except itself. Mapping keys are lexicographically sorted. `completed_checks` are sorted by `check_id`, contain every effective required check exactly once, and contain no other check. `reason_codes` are unique and lexicographically sorted. Safe locations are sorted by their canonical tuple. These ordering rules make list presentation deterministic rather than relying on Scanner insertion order.
+
+`pass`, `review_required`, and `blocked` require every effective check to have `completion_status: completed`. `unknown` requires at least one `not_completed` or `unknown` check, or an operational-unknown reason that proves why complete safety evidence is unavailable. `pass` requires empty `reason_codes`, `safe_locations.state: none`, and `review_requirement.state: not_required`. `review_required` requires at least one contextual reason, a present safe location, and `human_review_required`. `blocked` requires at least one hard-block reason and `not_required`. `unknown` requires at least one operational-unknown reason and `not_required`. Impossible combinations are invalid validator results, not a fifth scan status.
+
+Safe locations have exactly one of these closed forms:
+
+```yaml
+safe_locations:
+  state: none
+```
+
+```yaml
+safe_locations:
+  state: present
+  locations:
+    - location_type: section_id
+      section_id: safe-ascii-identifier
+    # or
+    - location_type: field_path
+      field_path: [safe-ascii-field-segment]
+    # or
+    - location_type: line_range
+      start_line: positive-integer
+      end_line: positive-integer
+```
+
+Locations never contain matched text, field values, absolute paths, source excerpts, payload fragments, or content-reconstructing offsets. A `field_path` names registered structural fields only. Line ranges identify positions without retaining the line. The policy-defined safe ASCII patterns and maximum list sizes are closed Schema constants.
+
+Timestamps prove scan execution interval only. `scan_started_at` must not be after `scan_completed_at`; neither timestamp establishes Candidate identity, latest status, retry ordering, or authorization.
+
+#### Human Review Record and binding
+
+The existing immutable Human Action Record shape above is retained exactly; no second Review Record vocabulary is introduced. `false_positive_confirmed` means only that an authorized Human determined the contextual finding identified by the exact evidence is not prohibited under the accepted policy. It cannot waive a hard block, cure `unknown`, or change the immutable `scan_status`.
+
+The review authority is a registered Human Action boundary whose trusted actor identity and action authorization validate under the existing Human Gate contract. The Record binds to `scan_evidence_id`, `scan_evidence_hash`, `payload_hash`, `artifact_type`, `security_policy_version`, and `artifact_type_policy_version`. Any evidence change, policy incompatibility, Candidate byte change, or payload-hash change invalidates reuse and requires a new scan and, when still required, a new Human Action.
+
+The evidence `review_requirement` variants are exactly:
+
+```yaml
+review_requirement:
+  state: not_required
+```
+
+```yaml
+review_requirement:
+  state: human_review_required
+  allowed_action_types:
+    - false_positive_confirmed
+    - candidate_revision_required
+    - policy_decision_required
+  reason_codes: [registered-contextual-reason-code]
+```
+
+The Write Request Security Binding does not embed the Human Record. It retains only the exact immutable ID and hash pair, while the Interface and Writer resolve and fully validate the Record through the trusted Human Action boundary.
+
+#### Exact Write Request Security Binding shape
+
+The existing exact field set remains unchanged and is implemented with `additionalProperties: false`:
+
+```yaml
+development_security_scan_binding:
+  scan_evidence_id: string
+  scan_evidence_hash: sha256:string
+  scanned_payload_hash: sha256:string
+  security_policy_version: string
+  artifact_type_policy_version: string
+  scan_status: pass | review_required
+  final_security_decision: automatic_pass | human_false_positive_confirmed
+  human_review_binding:
+    state: not_required
+    # or exactly:
+    # state: required
+    # human_action_id: string
+    # human_action_record_hash: sha256:string
+```
+
+No separate binding hash is added. The future Write Request fingerprint covers the complete Security Binding; `scan_evidence_hash` and any `human_action_record_hash` independently protect the referenced immutable records. Adding Candidate or Scanner identity to this binding is rejected because the Write Request already holds Candidate identity and the resolved Scan Evidence authenticates Scanner identity. Duplicating them would create drift without adding authority.
+
+`pass` requires `automatic_pass` and `not_required`. `review_required` requires `human_false_positive_confirmed`, `required`, and a fully validated `false_positive_confirmed` Human Action Record. `blocked`, `unknown`, invalid Evidence, incompatible policy, unresolved Review, rejected Review, `candidate_revision_required`, and `policy_decision_required` produce no binding. Evidence is always resolved and revalidated; the binding is never accepted as a self-authenticating summary.
+
+#### Trusted Scanner provenance boundary
+
+The production boundary has an interface-only `DevelopmentSecurityScanner` and an opaque adapter-issued Scanner execution attestation. The attestation binds Scanner ID/version, accepted global and type-policy versions, exact payload hash, scan evidence ID/hash, execution interval, and registered adapter identity. The Validator accepts neither raw mappings nor caller booleans and performs the three-way equality:
+
+```text
+Scan Evidence scanner identity
+= trusted adapter execution identity
+= Security Policy Registry allowed Scanner identity
+```
+
+The public Scanner interface has no `_mint_context`, token-bearing constructor, receipt factory, or protected helper that an arbitrary subclass can use to create trusted evidence. Only the composition root may install a production adapter backed by the future accepted Scanner implementation. Tests use a separate test authority supplied at the validator composition boundary; it cannot instantiate the production attestation type or register itself as a production Scanner. This is an architectural provenance boundary, not a claim that Python object privacy is cryptographic authentication.
+
+#### Write Request eligibility and implementation order
+
+A Security Binding may be constructed only after the complete Evidence, trusted Scanner attestation, current policy compatibility, source binding, and any Human Action Record independently validate. The Interface must additionally prove exact equality of type, logical ID, payload format, source binding, and payload hash with the future Write Request. `blocked`, `unknown`, invalid Evidence, policy mismatch, payload mismatch, source mismatch, and unresolved Review remain ineligible.
+
+The implementation order is fixed as:
+
+1. source-binding Schema and Candidate integration;
+2. Security Policy Registry Schema and closed initial policy metadata, without detection rules;
+3. Scan Evidence Schema and validator contract;
+4. Human Action Record Schema reuse and Security-specific binding validation;
+5. `development_security_scan_binding` Schema and eligibility validator;
+6. trusted Scanner interface and adapter-attestation boundary;
+7. a separate accepted Scanner implementation decision covering engine, rules, false positives, fixtures, and versioning;
+8. Security validation Runtime and scan tracking integration; and
+9. Write Request Schema and Runtime.
+
+This order does not authorize Runtime, Scanner rules, Human Review UI, scan tracking State, Write Request, Writer, or persistence implementation in the contract-clarification change.
+
 ### Remaining Implementation Boundaries
 
 This decision does not select a secret-detection engine, regex or entropy rules, external security product, Scanner implementation, Scan Skill, staging or quarantine mechanism, Human Review UI, or concrete retry constant. It does not implement Schemas, Runtime, Workflow, Writer changes, scan tracking State, or policy compatibility storage. It also does not modify Domain ingestion, Career Knowledge, Resume generation, retention, or garbage collection.
