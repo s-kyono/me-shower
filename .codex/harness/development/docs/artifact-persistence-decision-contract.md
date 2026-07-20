@@ -3,7 +3,7 @@
 ## Status
 
 - Decision status: accepted design decision
-- Scope: formal-adoption ownership, Human execution-authorization binding, immutable revision evidence, Artifact type-to-path policy, persistence request/reference/result contracts, and Artifact-first State consistency for Development Harness artifacts
+- Scope: formal-adoption ownership, Human execution-authorization binding, immutable revision evidence, Artifact type-to-path policy, persistence boundary contracts, Artifact-first State consistency, and orphan recovery policy for Development Harness artifacts
 - Implementation status: contract only
 - Effective boundary: Artifact generation, persistence, and formal adoption are separate responsibilities
 
@@ -11,7 +11,7 @@ This contract uses **formal-adoption decision owner** instead of the less explic
 
 ## Scope
 
-This decision defines who may decide that an Artifact or Decision is formally adopted, how Plan readiness remains separate from Human implementation delegation, how revisioned evidence binds both decisions to the execution package, how each registered Artifact type maps to a safe repository path, the required fields that cross the Artifact Persistence boundary, and how a verified Artifact Reference is reflected into Workflow State.
+This decision defines who may decide that an Artifact or Decision is formally adopted, how Plan readiness remains separate from Human implementation delegation, how revisioned evidence binds both decisions to the execution package, how each registered Artifact type maps to a safe repository path, the required fields that cross the Artifact Persistence boundary, how a verified Artifact Reference is reflected into Workflow State, and how an incomplete State connection is identified and recovered safely.
 
 It does not implement Path Policy, Schema files, atomic persistence, State persistence, or an Artifact Writer.
 
@@ -896,7 +896,7 @@ release_ready
 publish_succeeded
 ```
 
-The Writer does not know or decide these facts. A `written` or `already_written` result says nothing about whether State later references the Artifact. The Artifact-first update order is defined below; unreferenced-Artifact classification and recovery and the final transaction boundary remain deferred.
+The Writer does not know or decide these facts. A `written` or `already_written` result says nothing about whether State later references the Artifact. The Artifact-first update order and orphan recovery policy are defined below; the final transaction boundary remains deferred.
 
 ### Binding and Idempotency
 
@@ -949,7 +949,7 @@ Artifact Writer
   → does not change State
 ```
 
-The Persistence Orchestrator remains the existing allocation and coordination responsibility; this decision introduces no new owner. The lower-level call boundary between it and the Artifact Writer is not a fourth public contract and is deferred to implementation design. Neither component may decide formal adoption, Human authorization, Workflow transition, security-scan ownership, or unreferenced-Artifact classification.
+The Persistence Orchestrator remains the existing allocation and coordination responsibility; this decision introduces no new owner. The lower-level call boundary between it and the Artifact Writer is not a fourth public contract and is deferred to implementation design. Neither component may decide formal adoption, Human authorization, Workflow transition, or security-scan ownership. The Writer never classifies an orphan; the Orchestrator coordinates the recovery classification defined below through the responsible Interface.
 
 ## Artifact-first State Consistency Model
 
@@ -1155,17 +1155,241 @@ Artifact success alone, a sent State request, an unknown State result, Writer su
 
 ### Deliberately Unresolved Follow-on Boundaries
 
-This consistency model intentionally establishes only that a verified Artifact may exist without a State Reference after interruption or conflict. It does not decide:
+This consistency model establishes that a verified Artifact may exist without a State Reference after interruption or conflict. The orphan policy below classifies and handles that intermediate state without changing Artifact-first ordering. Candidate security-scan ownership and placement, filesystem locks, concrete atomic-write mechanics, and a transaction implementation spanning Artifact and State remain unresolved and cannot be inferred as successful, safe, or absent.
 
-- when such an Artifact is formally classified as an orphan;
-- orphan markers or State fields;
-- retention periods, automatic deletion, manual recovery, or reuse;
-- an orphan-recovery Agent or Skill;
-- Candidate security-scan ownership or its position before or after Artifact persistence;
-- filesystem locks or concrete atomic-write mechanics; or
-- a transaction implementation spanning Artifact and State.
+## Orphan Acceptance, Identification, and Recovery Policy
 
-These unknowns cannot be inferred as successful, safe, or absent. The next decision receives the possible unreferenced intermediate state as an explicit input without changing the Artifact-first ordering established here.
+An orphan is not garbage. In Human terms:
+
+```text
+orphanはゴミではなく、Stateとの接続が完了していない迷子のArtifactである。
+
+未参照Artifact
+≠ orphan
+
+保存処理の途中でState接続が完了しなかったArtifact
+= orphan候補
+```
+
+Artifact-first persistence necessarily permits a temporary orphan candidate when Artifact write succeeds but State connection does not complete. Temporary occurrence is allowed; indefinite invisible abandonment is not. An orphan candidate is never Persistence success, and automatic deletion without complete safety evidence is prohibited.
+
+The recovery order is fixed as:
+
+```text
+再接続できるか確認する
+  ↓
+再接続できるなら同じReferenceでつなぐ
+  ↓
+今はつなげないなら保留する
+  ↓
+安全に不要と証明できるまで削除しない
+```
+
+### Operation-bound Orphan Candidate Definition
+
+An unreferenced Artifact is not by itself an orphan candidate. Historical revisions, superseded Artifacts, immutable audit history, non-current Evidence Chain members, and Artifacts referenced by Decision or Authorization Records may correctly be absent from a current-reference field.
+
+An orphan candidate is identified only when one bound Persistence operation satisfies all of the following:
+
+1. its verified Write Result is `written` or `already_written`;
+2. that Result returns a fully verified Artifact Reference;
+3. the intended target State identity and exact target field are known;
+4. the corresponding State reference update is not verified as `applied` or `already_applied`; and
+5. Workflow Persistence success for that same operation has not been established.
+
+The binding must connect the Write Request identifiers and fingerprint, Write Result identity, Artifact Reference, original State target and compare-and-set preconditions, and the State update or recovery evidence. Filesystem or Artifact Root traversal may locate material for investigation, but path presence or absence alone can never classify an orphan candidate, prove provenance, authorize reconnection, or authorize deletion.
+
+### Candidate-producing Cases
+
+| Case | Candidate condition | Why it is not immediate success |
+| --- | --- | --- |
+| Process stops after Artifact verification | A verified Reference exists and no verified State update result exists | Artifact success does not prove State connection. |
+| State compare-and-set conflict | Artifact is verified but current State revision, hash, field, or current Reference differs | Forced overwrite is prohibited and the intended connection no longer has valid preconditions. |
+| Authorization becomes ineffective before State update | Artifact was validly saved but current authorization is revoked, stale, or bound to different evidence | Historical creation authority does not grant current reconnection authority. |
+| State write fails | Artifact is verified and the State result is operationally failed or initially unknown | State must be re-read; an acknowledgement failure cannot be interpreted as either success or absence. |
+| Post-update State re-read fails | A State write may have occurred but the exact Reference and invariants cannot be verified | An unverifiable result remains failed, never success. |
+| Material subject, Plan, or Design Lock change | Saved binding differs from the current subject or execution package | The old Artifact may remain valid history but cannot be attached to changed current meaning automatically. |
+
+Each case becomes a normal orphan candidate only when creation-time legitimacy can be verified. Missing or contradictory provenance changes its classification to `invalid_or_unknown` rather than making it reconnectable.
+
+### Creation-time Legitimacy
+
+Creation-time legitimacy answers only whether the Artifact was allowed to be created at the time of its Write Request. The recovery assessment must verify the following evidence to the extent required by the registered Artifact type and its lifecycle position:
+
+- the complete Write Request and its identifier/fingerprint binding;
+- a `written` or `already_written` Write Result bound to that Request;
+- the complete, currently readable Artifact Reference and both hashes;
+- the Plan and Design Lock revisions and hashes effective for creation;
+- the immutable Human Authorization evidence effective for creation;
+- exact subject binding and source binding; and
+- the registered Artifact type, format, and Path Policy result.
+
+This applicability rule prevents circular evidence. A Plan, Design Lock, Decision Record, or Authorization Record being created cannot bind to itself as already persisted evidence; it instead binds to the registered predecessor, subject, accepted Decision set, trusted Human Action, or Harness evidence required for that type. For a later execution Artifact, the effective Plan, Design Lock, and Human Authorization bindings are all mandatory. Missing an applicable binding is `unknown`, never silently inapplicable.
+
+The assessment has exactly three outcomes:
+
+| Creation legitimacy | Meaning |
+| --- | --- |
+| `verified` | All required creation-time evidence exists, matches, and proves the write was authorized then. The operation may be assessed as a normal orphan candidate. |
+| `unknown` | Required provenance or binding evidence is missing, unreadable, or cannot be verified. Classify `invalid_or_unknown` and fail closed. |
+| `invalid` | Evidence is present but mismatches or proves that creation was outside its authority or contract. Classify `invalid_or_unknown` and fail closed. |
+
+Neither `unknown` nor `invalid` permits automatic State connection, reuse, deletion, or promotion to normal history. It requires isolation from reconnection and Human Review. A concrete quarantine directory or mechanism is not defined here.
+
+### Current Reconnection Eligibility
+
+Creation-time legitimacy and current reconnection eligibility are separate gates. A historically valid Artifact is reconnectable only when all of the following are currently true:
+
+- Authorization is effective and binds the current Plan, Decision set, Design Lock, and readiness evidence;
+- current Plan, Design Lock, subject, and source meanings remain compatible with the saved bindings;
+- the Artifact Reference, payload hash, content hash, format, Path Policy, and Artifact Root containment revalidate;
+- target State identity, expected revision, expected hash, and registered target field are current;
+- the complete expected current Artifact Reference precondition matches;
+- no different Reference has already won the target-field compare-and-set;
+- the same Reference is not already connected, except as an idempotent `already_connected` result; and
+- no unresolved material change or required Human decision remains.
+
+All current State comparisons use the complete compare-and-set contract fixed above. Creation authorization alone is never enough. Any missing, stale, unknown, or conflicting current evidence prevents automatic reconnection.
+
+### Orphan Candidate Classification
+
+After creation-time legitimacy and current eligibility are evaluated, every candidate receives exactly one classification:
+
+| Classification | Required conditions | Allowed next action |
+| --- | --- | --- |
+| `reconnectable` | Creation legitimacy is `verified`; the Artifact revalidates; current Authorization, Plan, Design Lock, subject, target field, and complete State CAS all pass. | Retry only the State connection with the same Artifact Reference. No Human approval is required for this ordinary in-scope retry. |
+| `deferred` | Creation legitimacy is `verified`, but current reconnection is unavailable or awaits a legitimate decision, including revocation, CAS conflict, different current Reference, material change, or Human Review. | Retain without claiming success; reassess after the blocking condition or Human decision changes. |
+| `invalid_or_unknown` | Creation legitimacy is `invalid` or `unknown`, or the Artifact/Reference integrity cannot be proven. | Fail closed, isolate from automatic reconnection, and require Human Review. |
+
+`deferred` is not Persistence success and is not permission to overwrite current State. `invalid_or_unknown` is not a normal orphan category and cannot be auto-reconnected merely because its bytes parse or its path matches a registered pattern.
+
+### Reconnection Outcomes
+
+Only a `reconnectable` candidate may enter automatic reconnection. Before each attempt, the complete Reference, exact bytes, payload hash, content hash, Path Policy, containment, subject binding, current Authorization, and full State CAS are revalidated.
+
+The attempt uses the same Artifact Reference and has exactly one outcome:
+
+| Outcome | Meaning |
+| --- | --- |
+| `reconnected` | The exact Reference was newly applied to the exact target field and the post-update State and all current invariants were verified. Persistence success is now established. |
+| `already_connected` | The same bound recovery operation finds the exact Reference already present, and the original operation binding plus all current Authorization, subject, State integrity, and field invariants revalidate. Persistence success is confirmed without another write. |
+| `still_deferred` | Creation legitimacy remains verified, but a non-final current condition such as revoked authorization, material-change review, or changed CAS prevents reconnection now. It remains deferred and is not success. |
+| `blocked` | A deterministic conflict, invalidation, integrity mismatch, different winning Reference, forbidden target, or rejected Human decision prevents this reconnection. It is not success and must not force State mutation. |
+| `failed` | The contract-valid reconnection encountered an operational failure. Mandatory State re-read cannot yet prove `reconnected` or `already_connected`; unresolved outcome remains failed. |
+
+`already_connected` requires more than Reference equality. It requires the same Persistence and recovery-operation binding and current invariant validation. Sending a State request, receiving a Tool acknowledgement, or observing the Artifact on disk never resolves a candidate.
+
+Reconnection never rewrites the Artifact phase:
+
+```text
+Artifact re-save
+  → unnecessary
+
+new Artifact revision
+  → prohibited
+
+State CAS retry with the same Reference
+  → permitted only for reconnectable
+```
+
+### Recovery Tracking State
+
+Orphan classification is mutable operational status and must not be written into immutable Artifact content, metadata, repository path, or Artifact Reference. It is represented in a separate recovery tracking State with its own revision and deterministic hash, and is mutated only by the same responsible Plan or Execute Interface that owns the applicable Workflow State. Keeping the recovery State in a separate revision domain prevents a tracking update from invalidating the target Workflow State CAS it records. This introduces no new Artifact type, current pointer, or State mutation owner.
+
+After a `written` or `already_written` Result and before the target current-Reference update, the Orchestrator must cause a `state_update_pending` tracking entry to be written and re-read under the recovery State's own CAS. This occurs after Artifact persistence, so it does not violate Artifact-first ordering, and it does not set the target current Reference or establish Persistence success. The target State update may proceed only after the entry is verified. If tracking persistence fails or its result is unknown, the target update does not proceed; the Artifact remains an incomplete candidate, and any later recovery without a verified entry must follow the `invalid_or_unknown` fail-closed rule below.
+
+Each recovery tracking entry has these required top-level fields:
+
+| Field | Required meaning |
+| --- | --- |
+| `recovery_record_schema_version` | Closed contract version for interpreting the entry. |
+| `recovery_record_id` | Stable unique identity for this recovery entry. |
+| `persistence_operation_id` | Stable identity joining the Artifact and State phases of one Persistence operation. |
+| `request_binding` | Required object containing `request_id`, `idempotency_key`, `request_fingerprint`, and `write_result_id`. |
+| `artifact_reference` | Complete verified Reference; never only a path. |
+| `state_target_binding` | Required object containing `target_state_id`, registered `target_field`, `expected_state_revision`, `expected_state_hash`, and complete `expected_current_artifact_reference`. |
+| `creation_authority_binding` | Registered discriminated object containing every Plan, Design Lock, Human Authorization, predecessor, subject, source, Human Action, or Harness-evidence binding applicable to the Artifact type at write time. |
+| `artifact_write_completed_at` | Trusted timestamp of verified `written` or `already_written` completion; it is evidence, not identity or ordering authority. |
+| `state_update_evidence` | Discriminated object: `not_attempted`, or `attempted` with trusted attempt time, State result, and safe reason code. |
+| `recovery_evidence` | Discriminated object: `not_attempted`, or `attempted` with trusted attempt time, exclusive reconnection outcome, and safe reason code. |
+| `lifecycle_status` | Exactly `state_update_pending`, `under_assessment`, `recovery_pending`, or `resolved`; it records process stage, not eligibility. |
+| `candidate_classification` | Exactly `pending`, `reconnectable`, `deferred`, or `invalid_or_unknown`; `pending` is allowed only until required evidence is assessed. |
+| `reason_code` | Closed machine-readable reason for the current lifecycle and classification; Human prose alone is insufficient. |
+
+The discriminated evidence objects avoid a large nullable timestamp and error-field collection: fields required by the selected variant are present, and inapplicable fields are absent. The independent recovery State revision and hash protect creation and updates of the tracking entry under the existing State mutation rules; they do not replace or relax the separately captured target Workflow State preconditions.
+
+The entry preserves which write produced the Artifact, which exact Artifact is involved, which State field was intended, the creation-time authority, current classification, and the latest State/recovery attempt. It contains references and safe identifiers only; it must not contain payload bytes, raw source, secrets, credentials, private information, raw exception output, or complete Tool output.
+
+If a recovery tracking entry cannot be found or verified, filesystem discovery cannot replace it. The Artifact may be investigated using its immutable envelope and other evidence, but it remains `invalid_or_unknown` unless the full operation and authority binding is independently reconstructed and Human-reviewed. An inventory check may raise such a discovered Artifact as an unclassified safety exception, but Path scanning alone cannot promote, reconnect, resolve, or delete it. This fail-closed limitation does not decide the future cross-resource transaction implementation.
+
+### Recovery State Transitions
+
+The minimum transitions are:
+
+```text
+artifact_written
+  → state_update_pending
+  → reconnectable
+  → reconnected
+  → resolved
+```
+
+```text
+artifact_written
+  → state_update_pending
+  → deferred
+```
+
+```text
+artifact_written
+  → provenance_invalid_or_unknown
+  → invalid_or_unknown
+```
+
+`artifact_written → state_update_pending` describes the operation stage. Assessment then sets `candidate_classification` to `reconnectable`, `deferred`, or `invalid_or_unknown`; a reconnectable entry uses lifecycle `recovery_pending`. `reconnected` or `already_connected` changes lifecycle to `resolved` after full verification. `still_deferred` retains classification `deferred`; `blocked` sets or keeps `deferred` when creation legitimacy remains verified, and otherwise sets `invalid_or_unknown`. `failed` retains the last safe classification and records only sanitized attempt evidence; it never becomes success by itself.
+
+A candidate ceases to be an orphan candidate only when `reconnected` or `already_connected` establishes Persistence success for the same operation. Artifact existence, request dispatch, Reference equality without invariant checks, `deferred`, or an unknown result cannot resolve it.
+
+### Deletion and Disposal Boundary
+
+No orphan candidate is automatically deleted by this policy. The following are explicitly insufficient grounds for deletion:
+
+- State has not yet reflected a newly saved Artifact;
+- current State does not reference the Artifact;
+- the Artifact is an older or superseded revision;
+- filesystem traversal finds no current pointer;
+- Evidence Chain, Decision Record, or Authorization Record references have not been exhaustively checked;
+- creation authority or provenance has not been verified;
+- reconnection eligibility has not been evaluated; or
+- a candidate is `deferred` or `invalid_or_unknown`.
+
+The required policy is:
+
+```text
+orphan candidate
+  → assess reconnection first
+
+not reconnectable now
+  → retain as deferred or invalid_or_unknown
+
+disposal
+  → wait for a future retention, Human Review, and garbage-collection decision
+```
+
+Final deletion conditions, retention duration, archive policy, automatic versus manual disposal, garbage collection, quarantine location, and physical deletion mechanics remain undecided. Human approval is required before any future final disposal policy acts on material whose safety and reference closure have not been deterministically proven. This design authorizes no deletion.
+
+Until such a future disposition policy exists, every unresolved tracking entry remains an explicit incomplete Persistence condition in recovery tracking State and must remain discoverable for reassessment. It cannot be silently dropped, marked successful, or omitted from required recovery review. This liveness requirement prohibits indefinite invisible abandonment without choosing a retention duration or deletion mechanism here.
+
+### Responsibility and Human Boundaries
+
+| Responsibility | Allowed duties | Prohibited duties |
+| --- | --- | --- |
+| Artifact Writer | Persist and verify Artifact; return Reference and Write Result | Classify orphan, mutate State, reconnect, delete, move, or rewrite Artifact |
+| Interface / Persistence Orchestrator | Bind Artifact and State results; detect incomplete Persistence; construct tracking evidence; coordinate classification and same-Reference retry | Directly delete Artifact, bypass State owner, invent missing provenance, or declare unknown evidence successful |
+| Responsible Plan or Execute Interface | Own CAS for its Workflow State and separate recovery tracking State; update and re-read each State; validate current Plan, Authorization, subject, target field, and recovery tracking entry | Alter Artifact or bypass current invariants |
+| Human | Decide treatment of provenance-unknown material, reuse after material change when a new Human decision is required, and any future final disposal authorization | Not required for ordinary reconnection when every `reconnectable` invariant passes |
+
+No recovery Agent, recovery Skill, or new State mutation owner is created by this decision. Human Review cannot retroactively rewrite invalid provenance; it may decide safe isolation, whether a new authorized operation should be created, or future disposal handling.
 
 ## Status Update Owner Matrix
 
@@ -1280,7 +1504,6 @@ Future Workflow alignment must preserve this accepted ownership rule: Human Acti
 
 The following remain future decisions or implementations:
 
-- orphan Artifact policy;
 - security scan ownership;
 - atomic Writer behavior;
 - State persistence;
@@ -1295,7 +1518,7 @@ The following remain future decisions or implementations:
 The next Artifact Persistence design decision is:
 
 ```text
-Orphan acceptance, identification, and recovery policy
+Candidate security scan responsibility owner
 ```
 
-That decision takes the possible unreferenced intermediate state as input and must not reopen the ownership, authorization, revision, Path Policy, persistence boundary contract, or Artifact-first State consistency decisions established here. Security-scan ownership and the final cross-resource transaction implementation remain deferred.
+That decision must not reopen the ownership, authorization, revision, Path Policy, persistence boundary contract, Artifact-first State consistency, or orphan recovery decisions established here. The final cross-resource transaction implementation remains deferred.
