@@ -1,0 +1,23 @@
+# `codex`でコーデックスが`docs=1`になり、書き込みエラーになってしまう。
+
+## 原因
+
+- `codex` コマンドで立ち上げる時に読み込み優先順位があり `docs=0`で書き込み権限を付与してるが、優先度負けにより、`docs=1`になる
+
+## 恒久
+
+- `/permissions`で `Approve for me`を選択すれば、プロジェクト内はフル権限で自律的にAIエージェントで動かせることが可能
+
+## 解決
+
+- `codex`で権限の優先順位を変える
+
+``` bash
+
+cd "$(git rev-parse --show-toplevel)"
+[~/projects/persol/me-shower] <s-kyono|s-kyono> % pwd -P
+[~/projects/persol/me-shower] <s-kyono|s-kyono> % test -w .codex/harness/development/docs
+[~/projects/persol/me-shower] <s-kyono|s-kyono> % echo "docs=$?"
+[~/projects/persol/me-shower] <s-kyono|s-kyono> % test -w .codex/harness/development/docs/artifact-persistence-decision-contract.md
+[~/projects/persol/me-shower] <s-kyono|s-kyono> % echo "file=$?"
+```
