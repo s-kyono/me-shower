@@ -3,7 +3,7 @@
 ## Status
 
 - Decision status: accepted design decision
-- Scope: formal-adoption ownership, Human execution-authorization binding, immutable revision evidence, Artifact type-to-path policy, persistence boundary contracts, Artifact-first State consistency, and orphan recovery policy for Development Harness artifacts
+- Scope: formal-adoption ownership, Human execution-authorization binding, immutable revision evidence, Artifact type-to-path policy, persistence boundary contracts, Artifact-first State consistency, orphan recovery, and pre-persistence Candidate security policy for Development Harness artifacts
 - Implementation status: contract only
 - Effective boundary: Artifact generation, persistence, and formal adoption are separate responsibilities
 
@@ -11,7 +11,7 @@ This contract uses **formal-adoption decision owner** instead of the less explic
 
 ## Scope
 
-This decision defines who may decide that an Artifact or Decision is formally adopted, how Plan readiness remains separate from Human implementation delegation, how revisioned evidence binds both decisions to the execution package, how each registered Artifact type maps to a safe repository path, the required fields that cross the Artifact Persistence boundary, how a verified Artifact Reference is reflected into Workflow State, and how an incomplete State connection is identified and recovered safely.
+This decision defines who may decide that an Artifact or Decision is formally adopted, how Plan readiness remains separate from Human implementation delegation, how revisioned evidence binds both decisions to the execution package, how each registered Artifact type maps to a safe repository path, the required fields that cross the Artifact Persistence boundary, how a verified Artifact Reference is reflected into Workflow State, how an incomplete State connection is recovered safely, and how a Development Artifact Candidate is cleared for persistence.
 
 It does not implement Path Policy, Schema files, atomic persistence, State persistence, or an Artifact Writer.
 
@@ -759,8 +759,9 @@ Every Write Request has exactly these required top-level fields:
 | `subject_binding` | The registered, discriminated subject-binding object required by `artifact_type`, including every applicable subject logical ID, subject revision, and subject content hash. A type with no external subject uses the registry's explicit `none` variant rather than an omitted field. |
 | `expected_latest` | Discriminated stale-write precondition defined below. It is always present and is never inferred from State or filesystem contents. |
 | `source_binding` | Discriminated provenance object naming the authorized generating boundary and its stable source reference or references. Its variant is fixed by `artifact_type`; it must not contain raw source, payload copies, complete Tool output, secrets, credentials, or private information. |
+| `development_security_scan_binding` | Complete binding to valid Development Artifact scan evidence, accepted Policy versions, derived final security decision, and the immutable Human Review Record when required. It must bind to the same type, logical ID, format, and payload hash. |
 
-These fields are necessary, rather than general tracing metadata. Without the schema version the shape cannot be interpreted safely; without request identity, idempotency, and the fingerprint, retries and identifier reuse cannot be distinguished; without type, logical ID, payload, format, and payload hash, the intended series and exact bytes cannot be validated; without subject and source bindings, the Artifact's meaning and authorized provenance cannot be verified; and without `expected_latest`, initial creation and stale updates cannot fail closed.
+These fields are necessary, rather than general tracing metadata. Without the schema version the shape cannot be interpreted safely; without request identity, idempotency, and the fingerprint, retries and identifier reuse cannot be distinguished; without type, logical ID, payload, format, and payload hash, the intended series and exact bytes cannot be validated; without subject and source bindings, the Artifact's meaning and authorized provenance cannot be verified; without `expected_latest`, initial creation and stale updates cannot fail closed; and without `development_security_scan_binding`, unscanned or policy-incompatible bytes could enter Artifact Root.
 
 Artifact-type variation is expressed only through registered discriminated variants of `subject_binding` and `source_binding`. Free-form optional field collections are prohibited. A binding field required by the selected variant must be present and non-null; an inapplicable field must be absent. The registry must reject an unknown variant.
 
@@ -775,6 +776,7 @@ payload_hash: sha256:string
 subject_binding: object
 expected_latest: object
 source_binding: object
+development_security_scan_binding: object
 ```
 
 `request_id`, `idempotency_key`, and `request_fingerprint` itself are excluded from the fingerprint envelope so identifiers do not define the requested content. The exact payload need not be duplicated in that envelope because its verified `payload_hash` commits to the exact bytes. Canonical serialization is a future Schema detail, but it must be fixed before implementation and must not depend on map presentation order.
@@ -1155,7 +1157,7 @@ Artifact success alone, a sent State request, an unknown State result, Writer su
 
 ### Deliberately Unresolved Follow-on Boundaries
 
-This consistency model establishes that a verified Artifact may exist without a State Reference after interruption or conflict. The orphan policy below classifies and handles that intermediate state without changing Artifact-first ordering. Candidate security-scan ownership and placement, filesystem locks, concrete atomic-write mechanics, and a transaction implementation spanning Artifact and State remain unresolved and cannot be inferred as successful, safe, or absent.
+This consistency model establishes that a verified Artifact may exist without a State Reference after interruption or conflict. The orphan policy below classifies and handles that intermediate state without changing Artifact-first ordering. Filesystem locks, concrete atomic-write mechanics, and a transaction implementation spanning Artifact and State remain unresolved and cannot be inferred as successful, safe, or absent.
 
 ## Orphan Acceptance, Identification, and Recovery Policy
 
@@ -1222,6 +1224,7 @@ Creation-time legitimacy answers only whether the Artifact was allowed to be cre
 - the Plan and Design Lock revisions and hashes effective for creation;
 - the immutable Human Authorization evidence effective for creation;
 - exact subject binding and source binding; and
+- the Development Artifact scan evidence and final security-decision binding effective for the exact payload; and
 - the registered Artifact type, format, and Path Policy result.
 
 This applicability rule prevents circular evidence. A Plan, Design Lock, Decision Record, or Authorization Record being created cannot bind to itself as already persisted evidence; it instead binds to the registered predecessor, subject, accepted Decision set, trusted Human Action, or Harness evidence required for that type. For a later execution Artifact, the effective Plan, Design Lock, and Human Authorization bindings are all mandatory. Missing an applicable binding is `unknown`, never silently inapplicable.
@@ -1308,7 +1311,7 @@ Each recovery tracking entry has these required top-level fields:
 | `request_binding` | Required object containing `request_id`, `idempotency_key`, `request_fingerprint`, and `write_result_id`. |
 | `artifact_reference` | Complete verified Reference; never only a path. |
 | `state_target_binding` | Required object containing `target_state_id`, registered `target_field`, `expected_state_revision`, `expected_state_hash`, and complete `expected_current_artifact_reference`. |
-| `creation_authority_binding` | Registered discriminated object containing every Plan, Design Lock, Human Authorization, predecessor, subject, source, Human Action, or Harness-evidence binding applicable to the Artifact type at write time. |
+| `creation_authority_binding` | Registered discriminated object containing every Plan, Design Lock, Human Authorization, predecessor, subject, source, Development security-scan, Human Action, or Harness-evidence binding applicable to the Artifact type at write time. |
 | `artifact_write_completed_at` | Trusted timestamp of verified `written` or `already_written` completion; it is evidence, not identity or ordering authority. |
 | `state_update_evidence` | Discriminated object: `not_attempted`, or `attempted` with trusted attempt time, State result, and safe reason code. |
 | `recovery_evidence` | Discriminated object: `not_attempted`, or `attempted` with trusted attempt time, exclusive reconnection outcome, and safe reason code. |
@@ -1390,6 +1393,382 @@ Until such a future disposition policy exists, every unresolved tracking entry r
 | Human | Decide treatment of provenance-unknown material, reuse after material change when a new Human decision is required, and any future final disposal authorization | Not required for ordinary reconnection when every `reconnectable` invariant passes |
 
 No recovery Agent, recovery Skill, or new State mutation owner is created by this decision. Human Review cannot retroactively rewrite invalid provenance; it may decide safe isolation, whether a new authorized operation should be created, or future disposal handling.
+
+## Development Artifact Candidate Security Scan
+
+The Development Artifact scan is the exit inspection immediately before a Candidate may enter:
+
+```text
+.codex/harness/development/artifacts/
+```
+
+In Human terms:
+
+```text
+Development Artifact scanは、
+開発中のArtifactを棚へ置く直前に、
+PromptやTool出力に混ざった秘密を持ち込まないための検査である。
+```
+
+It is distinct from Domain ingestion safety:
+
+```text
+Development Artifact scan
+  → determines whether exact Candidate bytes may enter Development Harness Artifact Root
+
+Domain ingestion safety
+  → determines whether material may enter Career Knowledge or Domain State
+```
+
+Development Artifact scan does not decide Career Knowledge persistence, Resume correctness, claim evidence, or Domain raw-source ingestion. Evidence before Claims remains a governing product/workflow invariant and is not collapsed into a security classification. Development scan does not replace or weaken it. A scan `pass` or Human-reviewed eligibility can never be reused as Domain persistence authorization. The same bytes intended for a Domain destination must independently pass that Domain's ingestion contract.
+
+### Policy Ownership and Responsibility Split
+
+The Development Harness is the formal owner of the global Development Artifact Security Policy, its versioning and hard blocks, and the requirement that each registered Artifact type have a versioned type policy. It does not delegate policy ownership to the Scanner or Writer. A material global or type-policy change follows the existing Plan and Human Decision boundary; Human approval changes the policy contract, not one blocked Candidate's result.
+
+```text
+Development Security Scanner
+  → inspects the exact final Candidate payload bytes
+  → returns machine-readable scan facts and evidence
+  → does not decide final persistence eligibility
+  → does not modify Candidate bytes
+  → does not persist the Artifact or mutate Workflow State
+  → does not originate Human Authorization
+
+Responsible Plan or Execute Interface
+  → verifies evidence integrity, policy versions, type policy, and Candidate binding
+  → derives whether Write Request generation is allowed
+  → requests Human Action only for review_required
+  → never forwards blocked, unknown, or unresolved review_required
+
+Artifact Writer
+  → mechanically verifies the Request, evidence, accepted policy versions, final decision, and exact byte hash
+  → writes only an eligible Candidate
+  → never owns Security Policy, scans content, edits Candidate bytes, interprets context, or approves exceptions
+
+Human
+  → acts only on review_required or a material policy-design question
+  → may confirm a false positive or require minimization, anonymization, removal, replacement, or policy work
+  → cannot override a hard block or unknown result for one Candidate
+```
+
+The Scanner reports detection facts. The Interface applies the Harness-owned policy and Human evidence to decide whether the Write Request may be constructed. The Writer enforces that already-derived decision without reinterpreting Scanner findings or Human intent.
+
+### Mandatory Pre-persistence Position and Byte Binding
+
+The only normal order is:
+
+```text
+generate Artifact Candidate
+  → finalize exact Candidate payload bytes
+  → compute payload hash
+  → run Development Artifact security scan
+  → produce scan evidence
+  → verify evidence-to-Candidate binding
+  → derive final security decision
+  → construct Write Request
+  → Artifact Writer verifies the same bytes and persists
+```
+
+Post-persistence scanning is not a primary path and cannot cure an unscanned write. Unscanned Candidate bytes, scan staging material, temporary scan output, and review material must never be placed beneath Artifact Root.
+
+The following equality is mandatory at Interface and Writer boundaries:
+
+```text
+scan_evidence.payload_hash
+= Write_Request.payload_hash
+= SHA-256(exact payload bytes received by Artifact Writer)
+```
+
+One changed byte invalidates the old evidence and any Human Review Record bound to its hash. The revised Candidate has a new payload hash and requires a new scan. No newline, encoding, Unicode, whitespace, or semantic normalization may occur between hashing, scanning, and writing.
+
+### Scan Surface
+
+The mandatory semantic and secret scan surface is the exact payload byte sequence intended for persistence, regardless of whether its source is Human Prompt, Agent, Skill, Tool output, repository inspection, Review, Plan, ADR, Design Lock, Authorization, Decision, or Handoff generation. No source receives an implicit trust exemption.
+
+The immutable envelope is handled in two layers:
+
+- exact Candidate payload bytes receive the full Development Security scan;
+- caller-supplied meaning-bearing metadata receives deterministic hard-block, format, minimization, and registered-field validation before Write Request construction;
+- fixed metadata derived exclusively from closed schemas, registry values, revision allocation, hashes, and Path Policy does not require the same semantic scanner, but is structurally validated; and
+- any metadata field capable of carrying free-form or source-derived text must either be included in the scanned payload or receive separately hash-bound scan evidence under its registered type policy.
+
+This distinction avoids rescanning fixed machine metadata while preventing secret-bearing text from bypassing the payload scan through an envelope field.
+
+### Exclusive Security Classifications
+
+Every completed scan evidence has exactly one classification:
+
+| Classification | Exclusive meaning | Persistence consequence |
+| --- | --- | --- |
+| `pass` | All required checks completed; no prohibited data or unresolved ambiguous finding exists; global and type-specific policies pass. | Interface may automatically derive `automatic_pass` and construct a Write Request. |
+| `review_required` | A contextual private, internal, or possibly sensitive finding cannot be safely resolved by Scanner policy alone and may be a false positive or permitted minimized field. | Automatic persistence is prohibited until a valid bound Human Action resolves it. |
+| `blocked` | A hard-block value, definite prohibited content, forbidden raw material, or non-permitted type/field condition was detected. | Save is prohibited. Candidate-level Human override is impossible. |
+| `unknown` | Scanner execution, format support, policy identity, evidence completeness, timeout, integrity, or required-check proof is unavailable. | Save is prohibited and Human intuition cannot convert it to pass. |
+
+```text
+blocked
+  → save prohibited
+
+unknown
+  → save prohibited
+
+review_required
+  → save prohibited until the permitted Human Action is complete
+```
+
+`blocked` is a positive policy prohibition. `unknown` is inability to establish safety. `review_required` is a bounded contextual question. These meanings do not overlap.
+
+### Hard Blocks, Contextual Review, and Raw Content
+
+The global hard-block policy includes at least actual password values, access tokens, API keys, session secrets, private keys, authentication cookies, Authorization header values, credential-file contents, environment secret values, signing keys, encryption keys, and recovery codes. A Human cannot authorize those bytes as-is.
+
+If such content is needed for explanation, the Candidate must remove, redact, replace, or reference it without reproducing the value, then compute a new hash and run a new scan. Safe category labels and placeholders are allowed only when they cannot reconstruct the protected value.
+
+Contextual findings may include a real person's name, company or customer name, internal project name, non-public URL, repository identifier, email address, user identifier, organization-internal information, or private business context. Their presence is not automatically pass or block. `review_required` is based on the registered Artifact type, purpose, required field, allowed field, minimization, available substitute, and whether raw material is being retained.
+
+Development Artifacts must not persist raw Prompt transcripts, complete conversations, complete Tool or terminal output, environment dumps, HTTP headers, secret-bearing configuration, or complete logs. A necessary excerpt must be minimized, structured, or replaced by a safe reference under the type policy. Even when an excerpt is legitimate evidence, hard-block bytes remain prohibited.
+
+The policy is explicitly layered:
+
+```text
+global hard-block policy
+  + registered Artifact type-specific allowance policy
+  + data-minimization policy
+  + raw-content prohibition policy
+```
+
+A single forbidden-word list is insufficient. Every closed-registry Artifact type must bind to a defined type-policy version. An unregistered type or a registered type lacking an applicable policy fails closed.
+
+Type policy may, under minimization, permit repository paths and technical identifiers in a Plan, trusted actor identity in an Authorization Record, safe finding locations in a Review, and branch names or commit SHAs in a Handoff. Those examples are not blanket allowlists: the registered field, purpose, raw-content rule, global hard blocks, and current type-policy version still govern each value.
+
+### Scan Evidence Contract
+
+Scan evidence is an immutable operational record in the separate scan tracking State, outside Artifact Root. It is not a canonical Development Artifact and cannot itself serve as security policy or Human decision.
+
+Every evidence record has these required fields:
+
+| Field | Required meaning |
+| --- | --- |
+| `scan_evidence_schema_version` | Closed evidence contract version. |
+| `scan_evidence_id` | Globally unique immutable evidence identity. |
+| `evidence_hash` | SHA-256 of the canonical evidence record excluding this field, used with trusted Scanner identity verification. |
+| `scanner_id` | Trusted registered Scanner implementation identity. |
+| `scanner_version` | Exact Scanner version used. |
+| `security_policy_version` | Exact global Development Artifact Security Policy version evaluated. |
+| `artifact_type_policy_version` | Exact registered type-policy version evaluated. |
+| `artifact_type` | Closed-registry Candidate type. |
+| `logical_artifact_id` | Candidate logical series identity. |
+| `payload_hash` | SHA-256 of the exact scanned payload bytes. |
+| `payload_format` | Registered Candidate format. |
+| `source_binding` | Safe reference-only provenance binding matching the Candidate; never source content. |
+| `scan_status` | Exactly `pass`, `review_required`, `blocked`, or `unknown`. |
+| `completed_checks` | Closed set of check identifiers and completion states required by both policy versions. Missing or unknown required checks prevent `pass`. |
+| `reason_codes` | Required list of safe closed codes; it may be empty only for `pass`. |
+| `safe_locations` | Discriminated object: `none`, or safe section identifiers, field paths, or line ranges that cannot reproduce finding values. |
+| `review_requirement` | Discriminated object: `not_required`, or `human_review_required` with allowed action types and safe reason codes. |
+| `scan_started_at` | Trusted scan start timestamp; not identity or ordering authority. |
+| `scan_completed_at` | Trusted scan completion timestamp. |
+
+Evidence canonicalization must be fixed before implementation. The Interface and Writer recompute `evidence_hash`, authenticate the registered Scanner identity through the trusted execution boundary, and reject unknown schema, Scanner, or policy versions.
+
+The evidence combinations are closed: `review_required` requires `review_requirement: human_review_required`; `pass`, `blocked`, and `unknown` require `review_requirement: not_required`. A hard-block reason code cannot coexist with `pass` or `review_required`. Any impossible combination makes the evidence invalid and persistence unavailable.
+
+Evidence, errors, logs, and review summaries must never contain Candidate payload, a detected value, credential text, private-information text, raw Prompt, raw Tool output, environment dumps, secret-bearing stack arguments, or a content-reconstructing excerpt. Reasons use codes such as `credential_pattern_detected`, never a value-bearing message. Consistent with Write Result, safe errors also omit payload hash values; a hash remains in the structured evidence binding, not logs or messages.
+
+Safe error and log output is limited to a closed machine-readable code, a sanitized message, registered Scanner or policy identifiers, a retryable flag, and a safe location identifier. Raw exceptions and stack traces must be sanitized before any persistence or display.
+
+### Human Review Contract
+
+`review_required` permits exactly these Human Actions:
+
+| Action | Meaning and next step |
+| --- | --- |
+| `false_positive_confirmed` | Human confirms the safe category/location is not prohibited content. The immutable Record applies only to the exact evidence, type, and payload hash; Interface may derive `human_false_positive_confirmed`. |
+| `candidate_revision_required` | Human requires removal, anonymization, minimization, replacement, or reference conversion. Changed bytes form a new Candidate hash and must be scanned again. |
+| `policy_decision_required` | The policy cannot express a legitimate general rule. Candidate persistence stops until an accepted policy change creates a new version and the Candidate is rescanned. |
+
+Every immutable Human Review Record has exactly:
+
+```yaml
+human_action_id: string
+human_action_record_hash: sha256:string
+actor_identity: trusted-human-identity
+action_type: false_positive_confirmed | candidate_revision_required | policy_decision_required
+scan_evidence_id: string
+scan_evidence_hash: sha256:string
+payload_hash: sha256:string
+artifact_type: registered-type
+security_policy_version: string
+artifact_type_policy_version: string
+reason_code: safe-closed-code
+created_at: trusted-timestamp
+```
+
+`human_action_record_hash` covers the canonical immutable Record excluding itself; without it the Writer could not verify that the reviewed action and bindings were unchanged. The policy versions and evidence hash prevent the action from being rebound to different policy semantics or altered evidence.
+
+The Record is an append-only event in scan tracking State, not a rewrite of scan evidence. `false_positive_confirmed` is accepted only when the original evidence is `review_required`, its review requirement allows that action, and neither evidence nor current policy contains a hard-block reason. It does not change `scan_status` to `pass`; final persistence eligibility is derived from both immutable records. Candidate changes invalidate the Record because its payload hash no longer matches.
+
+Review UI and records expose only safe category, safe location, code, type, and purpose. They must not show or replicate the suspected secret or private value.
+
+These actions are prohibited:
+
+```text
+save_anyway
+ignore_security_scan
+force_pass
+override_blocked
+override_unknown
+```
+
+A blocked Candidate must be revised and rescanned. Unknown requires Scanner recovery, another registered Scanner accepted by policy, or a policy/version repair followed by a new scan. Human judgment cannot substitute for scan evidence.
+
+### Bounded Retry and Candidate Lineage
+
+Scan lifecycle evidence is held in a separate versioned scan tracking State owned by the responsible Plan or Execute Interface. It records a stable `candidate_lineage_id`, every distinct payload hash, scan evidence IDs, Scanner execution attempts, Candidate revision cause, Human Action references, policy versions, lifecycle status, and the latest classification. Durable State revision and hash make limits survive process restart.
+
+The mandatory loop controls are:
+
+- the same payload hash and accepted policy versions reuse existing valid scan evidence instead of rescanning;
+- a Scanner runtime `unknown` may retry only up to the finite `max_scanner_execution_retries_per_payload` declared by Security Policy;
+- retry attempts are counted per lineage, payload hash, Scanner identity/version, and policy versions, not by process memory;
+- changed Candidate bytes create a new hash within the same lineage and require a new scan;
+- automatic Candidate modification, if a future authorized modifier exists, is limited to one new Candidate revision per lineage;
+- after the applicable retry or automatic-revision limit, lifecycle becomes `human_action_required`, not `blocked`; and
+- Human-requested revision, same-Candidate retry, Scanner execution retry, and policy-version rescan remain distinct recorded causes.
+
+No Scanner modifies bytes. This decision creates no automatic modifier. The one-revision ceiling constrains any future modifier without authorizing one. A Human may request another explicit Candidate revision, but each changed payload is rescanned and the durable lineage remains visible; no automatic loop restarts from zero.
+
+In Human terms:
+
+```text
+同じCandidateを何度もscanしない。
+Candidateが変わった場合だけ新しくscanする。
+自動修正と再scanは有限回で停止する。
+```
+
+### Scan Lifecycle and Classification Separation
+
+Lifecycle and security result are independent fields. Scan evidence always contains one of the four security classifications; tracking State represents pre-scan and control flow separately.
+
+```text
+lifecycle_status:
+  candidate_created | scan_pending | human_review_pending |
+  candidate_revision_pending | ready_for_write |
+  human_action_required | terminated
+
+latest_scan:
+  state: absent
+  OR
+  state: present
+  scan_evidence_id: string
+  security_classification: pass | review_required | blocked | unknown
+```
+
+Required flows include:
+
+```text
+candidate_created → scan_pending → pass → ready_for_write
+
+candidate_created → scan_pending → review_required
+  → human_review_pending → false_positive_confirmed → ready_for_write
+
+candidate_created → scan_pending → review_required
+  → candidate_revision_pending → candidate_created → scan_pending
+
+candidate_created → scan_pending → blocked → terminated
+
+candidate_created → scan_pending → unknown
+  → bounded_retry → human_action_required
+```
+
+`bounded_retry` is an event/cause within scan tracking State, not a security classification. Exhaustion means automation cannot continue; it does not assert that the Candidate is dangerous.
+
+For an `unknown` result, `human_action_required` requests operational intervention to restore a registered Scanner, resolve policy/version support, or request a safe Candidate revision. It is not `false_positive_confirmed`, cannot authorize persistence, and cannot convert unknown evidence into pass.
+
+### Write Request Security Binding
+
+The required `development_security_scan_binding` has exactly these fields:
+
+```yaml
+development_security_scan_binding:
+  scan_evidence_id: string
+  scan_evidence_hash: sha256:string
+  scanned_payload_hash: sha256:string
+  security_policy_version: string
+  artifact_type_policy_version: string
+  scan_status: pass | review_required
+  final_security_decision: automatic_pass | human_false_positive_confirmed
+  human_review_binding:
+    state: not_required
+    # or:
+    # state: required
+    # human_action_id: string
+    # human_action_record_hash: sha256:string
+```
+
+`scan_status: pass` requires `automatic_pass` and `human_review_binding.state: not_required`. `scan_status: review_required` requires `human_false_positive_confirmed` and a complete valid `false_positive_confirmed` Record. Every other combination is invalid. `blocked` and `unknown` cannot appear in a Write Request binding because no Write Request may be generated for them.
+
+Before Request construction, the Interface verifies evidence integrity and Scanner identity, all required checks, logical ID, type, format, source binding, payload hash, accepted policy versions, final decision, and any Human Record. The following must all match the Write Request:
+
+```text
+scan evidence payload hash = Write Request payload hash
+scan evidence artifact type = Write Request artifact type
+scan evidence logical ID = Write Request logical ID
+scan evidence payload format = Write Request payload format
+scan evidence source binding = Write Request source binding
+```
+
+Every policy release declares whether evidence from an earlier version remains accepted, requires additional checks, or is revoked. A security-critical update marks affected earlier versions `rescan_required`; those versions cannot produce a new Write Request. Unchanged compatible policy may explicitly accept earlier evidence. Missing, unknown, or ambiguous compatibility fails closed. Detailed compatibility storage and migration are implementation design, but unconditional validity and unconditional invalidation are both prohibited.
+
+### Artifact Writer Save Gate
+
+The responsible Interface / Persistence Orchestrator resolves the immutable evidence and any Human Review Record from scan tracking State and supplies them through the trusted persistence boundary. The Writer does not independently mutate or interpret that State. It saves only when all of these mechanically verifiable conditions pass:
+
+1. the complete Write Request and request fingerprint validate;
+2. exact received bytes match Request `payload_hash`;
+3. scan evidence exists, authenticates, and its canonical evidence hash validates;
+4. evidence type, logical ID, format, source binding, and payload hash match the Request;
+5. Scanner, global policy, and type-policy versions are registered and currently accepted;
+6. every required check completed;
+7. final decision is `automatic_pass` for original `pass`, or `human_false_positive_confirmed` for original `review_required` with a valid exact-hash Human Record;
+8. neither evidence nor current policy indicates `blocked` or `unknown`; and
+9. all existing revision, Path Policy, and create-only preconditions pass.
+
+The Writer does not reinterpret findings, downgrade a hard block, decide false positives, repair evidence, or infer Human intent. Any invalid combination returns `blocked` under the existing Write Result contract. Scanner execution failure remains `unknown` before Write Request generation and must not be mislabeled as Writer filesystem `failed`.
+
+### Security and Persistence Success Separation
+
+```text
+Security scan success
+≠ Artifact write success
+≠ State update success
+≠ Persistence success
+```
+
+`pass` or a valid Human-reviewed final decision means only that the exact Candidate may proceed to Write Request. It does not prove an Artifact exists, a Reference is valid, State is connected, or the Persistence operation completed. Artifact-first write, recovery tracking, State update, and orphan contracts remain unchanged.
+
+### Fail-closed Save Conditions
+
+Candidate persistence is prohibited when any of the following holds:
+
+- scan evidence is absent, incomplete, unauthenticated, or has an invalid evidence hash;
+- payload hash, type, logical ID, format, or source binding differs;
+- Scanner, Security Policy, type-policy, or compatibility version is unknown or unacceptable;
+- any mandatory check is incomplete or unknown;
+- status is `blocked` or `unknown`;
+- status is `review_required` without an exact-hash valid `false_positive_confirmed` Record;
+- Human Action type, evidence ID, payload hash, or Artifact type differs;
+- Candidate bytes changed after scan;
+- a hard block is paired with any Human override attempt;
+- Artifact type is unregistered or lacks a type policy; or
+- lifecycle has not reached `ready_for_write`.
+
+Failure never authorizes placement of Candidate bytes, temporary scan files, review copies, or logs beneath Artifact Root. Pre-scan Candidate holding and quarantine implementation remain outside this design; Artifact Root is not a staging area.
+
+### Remaining Implementation Boundaries
+
+This decision does not select a secret-detection engine, regex or entropy rules, external security product, Scanner implementation, Scan Skill, staging or quarantine mechanism, Human Review UI, or concrete retry constant. It does not implement Schemas, Runtime, Workflow, Writer changes, scan tracking State, or policy compatibility storage. It also does not modify Domain ingestion, Career Knowledge, Resume generation, retention, or garbage collection.
 
 ## Status Update Owner Matrix
 
@@ -1502,9 +1881,8 @@ Future Workflow alignment must preserve this accepted ownership rule: Human Acti
 
 ## Decisions Intentionally Deferred
 
-The following remain future decisions or implementations:
+The following remain future implementations:
 
-- security scan ownership;
 - atomic Writer behavior;
 - State persistence;
 - `submit_plan` execution implementation;
@@ -1513,12 +1891,6 @@ The following remain future decisions or implementations:
 - Schema additions; and
 - Workflow changes.
 
-## Next Design Decision
+## Artifact Persistence Design Completion
 
-The next Artifact Persistence design decision is:
-
-```text
-Candidate security scan responsibility owner
-```
-
-That decision must not reopen the ownership, authorization, revision, Path Policy, persistence boundary contract, Artifact-first State consistency, or orphan recovery decisions established here. The final cross-resource transaction implementation remains deferred.
+The eight planned Artifact Persistence decision areas are now defined at contract level: formal-adoption ownership, immutable revisions, Artifact-first State consistency, orphan recovery, persistence boundary fields, Artifact type and Path Policy, Development Candidate security-scan ownership, and Human Gate/status binding. Implementation, Schema, Runtime, Workflow, and the final cross-resource transaction boundary remain separate future work and must preserve these decisions.
