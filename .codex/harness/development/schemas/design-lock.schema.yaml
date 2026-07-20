@@ -17,7 +17,6 @@ required:
   - acceptance_mapping
   - deviation_policy
   - constraints
-  - approval
   - extensions
 properties:
   schema_version:
@@ -29,7 +28,7 @@ properties:
     required:
       - id
       - epic_id
-      - status
+      - artifact_lifecycle_status
       - revision
       - plan_revision
       - created_at
@@ -40,12 +39,10 @@ properties:
       epic_id:
         type: string
         minLength: 1
-      status:
+      artifact_lifecycle_status:
         type: string
         enum:
-          - draft
-          - locked
-          - invalidated
+          - candidate
           - superseded
       revision:
         type: integer
@@ -273,43 +270,5 @@ properties:
     type: array
     items:
       type: string
-  approval:
-    type: object
-    additionalProperties: false
-    required:
-      - submitted
-      - submitted_by
-      - submitted_at
-    properties:
-      submitted:
-        type: boolean
-      submitted_by:
-        anyOf:
-          - type: string
-          - type: "null"
-      submitted_at:
-        anyOf:
-          - type: string
-            format: date-time
-          - type: "null"
   extensions:
     type: object
-allOf:
-  - if:
-      properties:
-        lock:
-          properties:
-            status:
-              const: locked
-    then:
-      properties:
-        approval:
-          properties:
-            submitted:
-              const: true
-            submitted_by:
-              type: string
-              minLength: 1
-            submitted_at:
-              type: string
-              format: date-time

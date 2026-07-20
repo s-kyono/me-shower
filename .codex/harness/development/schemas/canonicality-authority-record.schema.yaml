@@ -1,0 +1,86 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/canonicality-authority-record.schema.yaml"
+title: "Development Artifact Canonicality Authority Record"
+type: object
+additionalProperties: false
+required:
+  - authority_schema_version
+  - authority_record_id
+  - authority_type
+  - authority_source
+  - actor_identity
+  - action_type
+  - artifact_type
+  - logical_artifact_id
+  - candidate_id
+  - candidate_payload_hash
+  - subject_binding
+  - canonical_decision
+  - checked_snapshot_hash
+  - material_context_hash
+  - status
+  - decided_at
+  - authority_record_hash
+properties:
+  authority_schema_version:
+    const: "1.0"
+  authority_record_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  authority_type:
+    type: string
+    enum: [human_action, workflow_guard, source_agent_decision]
+  authority_source:
+    $ref: "./canonicality-common.schema.yaml#/$defs/source_identity"
+  actor_identity:
+    oneOf:
+      - $ref: "./canonicality-common.schema.yaml#/$defs/actor_identity"
+      - type: "null"
+  action_type:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  artifact_type:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  logical_artifact_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  candidate_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  candidate_payload_hash:
+    $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+  subject_binding:
+    $ref: "./canonicality-common.schema.yaml#/$defs/subject_binding"
+  canonical_decision:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  checked_snapshot_hash:
+    oneOf:
+      - $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+      - type: "null"
+  material_context_hash:
+    $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+  status:
+    type: string
+    enum: [effective, revoked]
+  decided_at:
+    type: string
+    format: date-time
+  authority_record_hash:
+    $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+allOf:
+  - if:
+      properties:
+        authority_type:
+          const: human_action
+    then:
+      properties:
+        actor_identity:
+          $ref: "./canonicality-common.schema.yaml#/$defs/actor_identity"
+    else:
+      properties:
+        actor_identity:
+          type: "null"
+  - if:
+      properties:
+        authority_type:
+          enum: [workflow_guard, source_agent_decision]
+    then:
+      properties:
+        checked_snapshot_hash:
+          $ref: "./canonicality-common.schema.yaml#/$defs/sha256"

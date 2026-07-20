@@ -1,0 +1,32 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/artifact-candidate.schema.yaml"
+title: "Development Artifact Candidate Identity"
+type: object
+additionalProperties: false
+required:
+  - candidate_schema_version
+  - candidate_id
+  - artifact_type
+  - logical_artifact_id
+  - artifact_lifecycle_status
+  - payload_hash
+  - subject_binding
+  - generated_by
+properties:
+  candidate_schema_version:
+    const: "1.0"
+  candidate_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  artifact_type:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  logical_artifact_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  artifact_lifecycle_status:
+    type: string
+    enum: [candidate, draft, proposed, superseded]
+  payload_hash:
+    $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+  subject_binding:
+    $ref: "./canonicality-common.schema.yaml#/$defs/subject_binding"
+  generated_by:
+    $ref: "./canonicality-common.schema.yaml#/$defs/source_identity"

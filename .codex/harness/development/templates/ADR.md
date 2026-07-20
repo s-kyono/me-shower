@@ -1,7 +1,7 @@
 ---
 adr_id: "{{ adr_id }}"
 title: "{{ title }}"
-status: "{{ proposed | accepted | rejected | superseded | deprecated }}"
+artifact_lifecycle_status: "{{ draft | proposed | superseded }}"
 date: "{{ date }}"
 epic: "{{ epic_id }}"
 supersedes: {{ supersedes }}

@@ -6,7 +6,7 @@ additionalProperties: false
 required:
   - adr_id
   - title
-  - status
+  - artifact_lifecycle_status
   - date
   - epic
   - supersedes
@@ -19,14 +19,12 @@ properties:
   title:
     type: string
     minLength: 1
-  status:
+  artifact_lifecycle_status:
     type: string
     enum:
+      - draft
       - proposed
-      - accepted
-      - rejected
       - superseded
-      - deprecated
   date:
     type: string
     format: date

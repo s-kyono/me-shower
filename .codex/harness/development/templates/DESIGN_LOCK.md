@@ -1,12 +1,10 @@
 ---
 design_lock_id: "{{ design_lock_id }}"
 epic_id: "{{ epic_id }}"
-status: "{{ draft | locked | invalidated | superseded }}"
+artifact_lifecycle_status: "{{ candidate | superseded }}"
 revision: {{ revision }}
 plan_revision: {{ plan_revision }}
 created_at: "{{ created_at }}"
-submitted_by: "{{ submitted_by }}"
-submitted_at: "{{ submitted_at }}"
 ---
 
 # Design Lock: {{ title }}
@@ -143,10 +141,6 @@ Execute must stop and return to Plan when any of the following is required:
 
 {{ invariants }}
 
-## 15. Approval
+## 15. Canonicality
 
-- Design Status: {{ approval_status }}
-- Submitted By: {{ submitted_by }}
-- Submitted At: {{ submitted_at }}
-- Plan Revision: {{ plan_revision }}
-- Design Lock Revision: {{ revision }}
+Canonical decision and Human Action binding are maintained outside this immutable Candidate.

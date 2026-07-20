@@ -1,7 +1,7 @@
 ---
 plan_id: "{{ plan_id }}"
 title: "{{ title }}"
-status: "{{ draft | under_review | accepted | superseded }}"
+artifact_lifecycle_status: "{{ candidate | superseded }}"
 revision: {{ revision }}
 created_at: "{{ created_at }}"
 updated_at: "{{ updated_at }}"
@@ -105,9 +105,6 @@ supersedes: {{ supersedes }}
 
 {{ implementation_design_handoff }}
 
-## 20. Approval
+## 20. Canonicality
 
-- Plan Status: {{ approval_status }}
-- Submitted By: {{ submitted_by }}
-- Submitted At: {{ submitted_at }}
-- Plan State Revision: {{ plan_state_revision }}
+Canonical decision and Human Action binding are maintained outside this immutable Candidate.

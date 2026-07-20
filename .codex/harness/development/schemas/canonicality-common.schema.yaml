@@ -1,0 +1,60 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/canonicality-common.schema.yaml"
+title: "Development Artifact Canonicality Common Definitions"
+$defs:
+  identifier:
+    type: string
+    pattern: "^[a-z0-9]+(?:[-_.:][a-z0-9]+)*$"
+  sha256:
+    type: string
+    pattern: "^[0-9a-f]{64}$"
+  source_identity:
+    type: object
+    additionalProperties: false
+    required: [source_id, source_version]
+    properties:
+      source_id:
+        $ref: "#/$defs/identifier"
+      source_version:
+        type: string
+        pattern: '^[0-9]+\.[0-9]+(?:\.[0-9]+)?$'
+  subject_binding:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [binding_type]
+        properties:
+          binding_type:
+            const: none
+      - type: object
+        additionalProperties: false
+        required:
+          - binding_type
+          - subject_type
+          - subject_id
+          - subject_revision
+          - subject_hash
+        properties:
+          binding_type:
+            const: bound
+          subject_type:
+            type: string
+            enum: [decision, plan, implementation, repository, authorization]
+          subject_id:
+            $ref: "#/$defs/identifier"
+          subject_revision:
+            type: integer
+            minimum: 1
+          subject_hash:
+            $ref: "#/$defs/sha256"
+  actor_identity:
+    type: object
+    additionalProperties: false
+    required: [actor_id, identity_provider, verified]
+    properties:
+      actor_id:
+        $ref: "#/$defs/identifier"
+      identity_provider:
+        $ref: "#/$defs/identifier"
+      verified:
+        const: true

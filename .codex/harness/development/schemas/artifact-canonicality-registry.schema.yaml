@@ -1,0 +1,86 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/artifact-canonicality-registry.schema.yaml"
+title: "Development Artifact Canonicality Registry"
+type: object
+additionalProperties: false
+required: [schema_version, artifact_types]
+properties:
+  schema_version:
+    const: "1.0"
+  artifact_types:
+    type: object
+    minProperties: 1
+    additionalProperties:
+      type: object
+      additionalProperties: false
+      required:
+        - artifact_type
+        - candidate_generators
+        - artifact_lifecycle_statuses
+        - canonicality
+      properties:
+        artifact_type:
+          $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+        candidate_generators:
+          type: array
+          minItems: 1
+          items:
+            $ref: "./canonicality-common.schema.yaml#/$defs/source_identity"
+        artifact_lifecycle_statuses:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum: [candidate, draft, proposed, superseded]
+        canonicality:
+          type: object
+          additionalProperties: false
+          required:
+            - authority_types
+            - allowed_decisions
+            - required_authority_binding
+            - contracts
+          properties:
+            authority_types:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items:
+                type: string
+                enum: [human_action, workflow_guard, source_agent_decision, not_applicable]
+            allowed_decisions:
+              type: array
+              uniqueItems: true
+              items:
+                $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+            required_authority_binding:
+              type: boolean
+            contracts:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                required:
+                  - authority_type
+                  - authority_source
+                  - action_types
+                  - allowed_decisions
+                properties:
+                  authority_type:
+                    type: string
+                    enum: [human_action, workflow_guard, source_agent_decision]
+                  authority_source:
+                    $ref: "./canonicality-common.schema.yaml#/$defs/source_identity"
+                  action_types:
+                    type: array
+                    minItems: 1
+                    uniqueItems: true
+                    items:
+                      $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+                  allowed_decisions:
+                    type: array
+                    minItems: 1
+                    uniqueItems: true
+                    items:
+                      $ref: "./canonicality-common.schema.yaml#/$defs/identifier"

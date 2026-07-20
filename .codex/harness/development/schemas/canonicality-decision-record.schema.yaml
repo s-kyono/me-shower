@@ -1,0 +1,52 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/canonicality-decision-record.schema.yaml"
+title: "Development Artifact Canonicality Decision Record"
+type: object
+additionalProperties: false
+required:
+  - decision_schema_version
+  - decision_record_id
+  - artifact_type
+  - logical_artifact_id
+  - candidate_id
+  - candidate_payload_hash
+  - subject_binding
+  - canonical_decision
+  - authority_type
+  - authority_reference
+  - decided_at
+  - decision_record_hash
+properties:
+  decision_schema_version:
+    const: "1.0"
+  decision_record_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  artifact_type:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  logical_artifact_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  candidate_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  candidate_payload_hash:
+    $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+  subject_binding:
+    $ref: "./canonicality-common.schema.yaml#/$defs/subject_binding"
+  canonical_decision:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  authority_type:
+    type: string
+    enum: [human_action, workflow_guard, source_agent_decision]
+  authority_reference:
+    type: object
+    additionalProperties: false
+    required: [authority_record_id, authority_record_hash]
+    properties:
+      authority_record_id:
+        $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+      authority_record_hash:
+        $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+  decided_at:
+    type: string
+    format: date-time
+  decision_record_hash:
+    $ref: "./canonicality-common.schema.yaml#/$defs/sha256"

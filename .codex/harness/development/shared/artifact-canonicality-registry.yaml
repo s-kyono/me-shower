@@ -1,0 +1,149 @@
+schema_version: "1.0"
+artifact_types:
+  adr:
+    artifact_type: adr
+    candidate_generators: [{source_id: build-adr-candidates, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [draft, proposed, superseded]
+    canonicality:
+      authority_types: [human_action]
+      allowed_decisions: [accepted, rejected, deferred]
+      required_authority_binding: true
+      contracts:
+        - authority_type: human_action
+          authority_source: {source_id: human-action-boundary, source_version: "1.0"}
+          action_types: [submit_decision]
+          allowed_decisions: [accepted, rejected, deferred]
+  decision_record:
+    artifact_type: decision_record
+    candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality: &not_applicable
+      authority_types: [not_applicable]
+      allowed_decisions: []
+      required_authority_binding: false
+      contracts: []
+  plan:
+    artifact_type: plan
+    candidate_generators: [{source_id: assemble-plan, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality:
+      authority_types: [human_action]
+      allowed_decisions: [accepted]
+      required_authority_binding: true
+      contracts:
+        - authority_type: human_action
+          authority_source: {source_id: human-action-boundary, source_version: "1.0"}
+          action_types: [submit_plan]
+          allowed_decisions: [accepted]
+  plan_review:
+    artifact_type: plan_review
+    candidate_generators: [{source_id: review-plan, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality: *not_applicable
+  design_review:
+    artifact_type: design_review
+    candidate_generators: [{source_id: design-implementation, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality: *not_applicable
+  guardrail_validation:
+    artifact_type: guardrail_validation
+    candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality: *not_applicable
+  design_lock:
+    artifact_type: design_lock
+    candidate_generators: [{source_id: lock-design, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality:
+      authority_types: [human_action]
+      allowed_decisions: [locked]
+      required_authority_binding: true
+      contracts:
+        - authority_type: human_action
+          authority_source: {source_id: human-action-boundary, source_version: "1.0"}
+          action_types: [submit_design]
+          allowed_decisions: [locked]
+  readiness_evidence:
+    artifact_type: readiness_evidence
+    candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality: *not_applicable
+  implementation_review:
+    artifact_type: implementation_review
+    candidate_generators: [{source_id: review-implementation, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality:
+      authority_types: [source_agent_decision]
+      allowed_decisions: [accepted, changes_required, blocked]
+      required_authority_binding: true
+      contracts:
+        - authority_type: source_agent_decision
+          authority_source: {source_id: review-implementation, source_version: "1.0"}
+          action_types: [implementation_review_decision]
+          allowed_decisions: [accepted, changes_required, blocked]
+  release_gate:
+    artifact_type: release_gate
+    candidate_generators: [{source_id: run-release-gate, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality:
+      authority_types: [workflow_guard]
+      allowed_decisions: [passed, failed, blocked]
+      required_authority_binding: true
+      contracts:
+        - authority_type: workflow_guard
+          authority_source: {source_id: run-release-gate, source_version: "1.0"}
+          action_types: [release_gate_decision]
+          allowed_decisions: [passed, failed, blocked]
+  fix_request:
+    artifact_type: fix_request
+    candidate_generators: [{source_id: execute-interface, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality: *not_applicable
+  repository_publish_handoff:
+    artifact_type: repository_publish_handoff
+    candidate_generators: [{source_id: create-repository-publish-handoff, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality: *not_applicable
+  authorization_grant:
+    artifact_type: authorization_grant
+    candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality:
+      authority_types: [human_action]
+      allowed_decisions: [granted]
+      required_authority_binding: true
+      contracts:
+        - authority_type: human_action
+          authority_source: {source_id: human-action-boundary, source_version: "1.0"}
+          action_types: [grant_execution]
+          allowed_decisions: [granted]
+  authorization_continuation:
+    artifact_type: authorization_continuation
+    candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality:
+      authority_types: [workflow_guard]
+      allowed_decisions: [continued]
+      required_authority_binding: true
+      contracts:
+        - authority_type: workflow_guard
+          authority_source: {source_id: authorization-continuation-guard, source_version: "1.0"}
+          action_types: [continue_authorization]
+          allowed_decisions: [continued]
+  authorization_revocation:
+    artifact_type: authorization_revocation
+    candidate_generators: [{source_id: plan-interface, source_version: "1.0"}]
+    artifact_lifecycle_statuses: [candidate, superseded]
+    canonicality:
+      authority_types: [human_action, workflow_guard]
+      allowed_decisions: [revoked]
+      required_authority_binding: true
+      contracts:
+        - authority_type: human_action
+          authority_source: {source_id: human-action-boundary, source_version: "1.0"}
+          action_types: [revoke_execution]
+          allowed_decisions: [revoked]
+        - authority_type: workflow_guard
+          authority_source: {source_id: material-safety-guard, source_version: "1.0"}
+          action_types: [revoke_execution]
+          allowed_decisions: [revoked]
