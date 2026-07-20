@@ -3,7 +3,7 @@
 ## Status
 
 - Decision status: accepted design decision
-- Scope: formal-adoption ownership, Human execution-authorization binding, immutable revision evidence, and Artifact type-to-path policy for Development Harness artifacts
+- Scope: formal-adoption ownership, Human execution-authorization binding, immutable revision evidence, Artifact type-to-path policy, and persistence request/reference/result contracts for Development Harness artifacts
 - Implementation status: contract only
 - Effective boundary: Artifact generation, persistence, and formal adoption are separate responsibilities
 
@@ -11,9 +11,9 @@ This contract uses **formal-adoption decision owner** instead of the less explic
 
 ## Scope
 
-This decision defines who may decide that an Artifact or Decision is formally adopted, how Plan readiness remains separate from Human implementation delegation, how revisioned evidence binds both decisions to the execution package, and how each registered Artifact type maps to a safe repository path.
+This decision defines who may decide that an Artifact or Decision is formally adopted, how Plan readiness remains separate from Human implementation delegation, how revisioned evidence binds both decisions to the execution package, how each registered Artifact type maps to a safe repository path, and the required fields that cross the Artifact Persistence boundary.
 
-It does not implement Path Policy, define Write Request or Reference Schemas, perform atomic persistence, persist State, or implement an Artifact Writer.
+It does not implement Path Policy, Schema files, atomic persistence, State persistence, or an Artifact Writer.
 
 The governing separation is:
 
@@ -446,7 +446,7 @@ Supersession is a relationship, not an in-place status update to the old Artifac
 
 ### Stale-write Prevention
 
-A future create request must carry at least the following concurrency preconditions at the contract level:
+A lower-level trusted create command, produced only after the Persistence Orchestrator accepts a Write Request and allocates a revision, must carry at least the following values:
 
 ```yaml
 logical_artifact_id: main-plan
@@ -456,7 +456,7 @@ expected_latest_hash: string
 content_hash: string
 ```
 
-The Persistence Orchestrator verifies the expected latest revision and hash before allocation and again as part of the create-only operation. Any mismatch is blocked; last-writer-wins is forbidden. A stale State revision cannot authorize a write merely because its requested new revision is not yet visible to the caller.
+The boundary Write Request defined below does not carry `new_artifact_revision` or caller-supplied `content_hash`; those values are derived after its preconditions pass. The Persistence Orchestrator verifies the expected latest revision and hash before allocation and again through the trusted create-only operation. Any mismatch is blocked; last-writer-wins is forbidden. A stale State revision cannot authorize a write merely because its allocated new revision is not yet visible to the caller.
 
 ### Idempotency
 
@@ -672,7 +672,7 @@ The current `ADR.md` Template contains a mutable-looking `status` field. Under t
 
 ### Current Reference Policy
 
-The filesystem has no canonical `current.json`, `latest` symlink, fixed-path copy, or other current pointer. Current Development Harness Artifact References are owned only by the relevant Workflow State. Development Execution State may eventually keep only an external, Agent-owned Repository Publish Result Reference; it does not store the Result body or absorb that Agent's publication State. The Reference Schema and State field are deferred. This avoids a second mutable source of truth and prevents a filesystem pointer from diverging from State.
+The filesystem has no canonical `current.json`, `latest` symlink, fixed-path copy, or other current pointer. Current Development Harness Artifact References are owned only by the relevant Workflow State. Development Execution State may eventually keep only an external, Agent-owned Repository Publish Result Reference; it does not store the Result body or absorb that Agent's publication State. Reference Schema implementation and the State field remain deferred. This avoids a second mutable source of truth and prevents a filesystem pointer from diverging from State.
 
 ### Symlink and Containment Policy
 
@@ -712,6 +712,244 @@ New Artifact types cannot be introduced by a Skill or free-form request. Adding 
 - enum, Path Policy, Schema, and tests.
 
 Registration must prove that its path cannot collide with an existing type. Until those elements are accepted together, the type is unknown and persistence fails closed.
+
+## Artifact Persistence Boundary Contracts
+
+This section fixes the required fields for the three contracts that cross the Artifact Persistence boundary. It does not define a Schema file or runtime implementation.
+
+In Human terms:
+
+```text
+Write Request
+  → what to save
+
+Artifact Reference
+  → a bookmark identifying which saved Artifact is meant
+
+Write Result
+  → whether persistence succeeded or did not succeed
+```
+
+For an Artifact Reference, identity and location remain separate:
+
+```text
+Reference identifies "what to read."
+Path identifies "where to read it from."
+```
+
+The repository path is required location evidence, but it is not the primary identity and must never be parsed to reconstruct missing identity fields.
+
+### Write Request
+
+A Write Request is the internal structured input presented to the Artifact Persistence boundary. It is not a Human approval request. Within a valid execution authorization and its bound Plan and Design Lock, the responsible Interface may request persistence without a separate Human approval for each Artifact.
+
+Every Write Request has exactly these required top-level fields:
+
+| Field | Meaning and required validation |
+| --- | --- |
+| `request_schema_version` | Closed contract version used to reject unknown or incompatible request shapes. |
+| `request_id` | Globally unique immutable identifier for this request. Reuse is valid only with the same verified request fingerprint. |
+| `idempotency_key` | Stable retry key. Reuse is valid only with the same `request_id` and verified request fingerprint. |
+| `request_fingerprint` | SHA-256 over the canonical request-fingerprint envelope defined below. The Persistence Orchestrator recomputes it rather than trusting the supplied value. |
+| `artifact_type` | Member of the closed Artifact Type Registry. It determines the only valid format, extension, subject-binding variant, and Path Policy rule. |
+| `logical_artifact_id` | Stable logical series identity validated under the registered type contract. It is not a repository path. |
+| `payload` | Exact byte sequence to persist, or a lossless transport representation decoded to that exact sequence. No newline, Unicode, key-order, whitespace, or semantic normalization is allowed. |
+| `payload_format` | Registered canonical format identifier for `artifact_type`; it must equal the registry value and cannot select an extension. |
+| `payload_hash` | SHA-256 of the exact decoded `payload` bytes, allowing transport or preprocessing changes to be detected before envelope construction. |
+| `subject_binding` | The registered, discriminated subject-binding object required by `artifact_type`, including every applicable subject logical ID, subject revision, and subject content hash. A type with no external subject uses the registry's explicit `none` variant rather than an omitted field. |
+| `expected_latest` | Discriminated stale-write precondition defined below. It is always present and is never inferred from State or filesystem contents. |
+| `source_binding` | Discriminated provenance object naming the authorized generating boundary and its stable source reference or references. Its variant is fixed by `artifact_type`; it must not contain raw source, payload copies, complete Tool output, secrets, credentials, or private information. |
+
+These fields are necessary, rather than general tracing metadata. Without the schema version the shape cannot be interpreted safely; without request identity, idempotency, and the fingerprint, retries and identifier reuse cannot be distinguished; without type, logical ID, payload, format, and payload hash, the intended series and exact bytes cannot be validated; without subject and source bindings, the Artifact's meaning and authorized provenance cannot be verified; and without `expected_latest`, initial creation and stale updates cannot fail closed.
+
+Artifact-type variation is expressed only through registered discriminated variants of `subject_binding` and `source_binding`. Free-form optional field collections are prohibited. A binding field required by the selected variant must be present and non-null; an inapplicable field must be absent. The registry must reject an unknown variant.
+
+The request-fingerprint envelope includes, in fixed canonical serialization, all meaning-bearing request inputs:
+
+```yaml
+request_schema_version: string
+artifact_type: string
+logical_artifact_id: string
+payload_format: string
+payload_hash: sha256:string
+subject_binding: object
+expected_latest: object
+source_binding: object
+```
+
+`request_id`, `idempotency_key`, and `request_fingerprint` itself are excluded from the fingerprint envelope so identifiers do not define the requested content. The exact payload need not be duplicated in that envelope because its verified `payload_hash` commits to the exact bytes. Canonical serialization is a future Schema detail, but it must be fixed before implementation and must not depend on map presentation order.
+
+The stale-write precondition has exactly one of these two forms:
+
+```yaml
+# First revision only: the logical series is expected not to exist.
+expected_latest:
+  state: absent
+```
+
+```yaml
+# Successor revision: both values are mandatory and must match.
+expected_latest:
+  state: present
+  artifact_revision: 4
+  content_hash: sha256:string
+```
+
+`state: absent` is valid only when no revision exists for the logical series. `state: present` requires both the exact latest positive Artifact revision and its verified content hash; matching only one is insufficient. Null, omitted, wildcard, latest-by-time, revision-only, and hash-only preconditions are invalid. The Persistence Orchestrator verifies both values against the current canonical Artifact before allocating the next revision. Missing, stale, unknown, or contradictory evidence is `blocked`.
+
+The Write Request never contains a caller-selected new Artifact revision. AI, Skills, and Human input provide meaning and bytes; the Interface / Persistence Orchestrator resolves the logical series, verifies `expected_latest`, and allocates the next positive monotonically increasing revision. Any lower-level create command carrying that allocation is an implementation detail outside these three boundary contracts and cannot be accepted from an untrusted caller.
+
+The following request fields and equivalents are forbidden:
+
+```text
+target_path
+absolute_path
+repository_path
+extension
+new_artifact_revision
+artifact_revision
+revision_path_segment
+```
+
+No caller-controlled value may indirectly select them. Repository path, extension, and the `r[0-9]{4,}` representation are derived only after revision allocation from the registered Artifact Type and Path Policy.
+
+`payload_hash` and `content_hash` have different scopes:
+
+```text
+payload_hash
+  = SHA-256 of the exact persisted payload bytes
+
+content_hash
+  = SHA-256 of the canonical immutable Artifact envelope,
+    including the exact payload bytes and all immutable Artifact metadata
+```
+
+The immutable envelope includes at least its envelope/schema version, Artifact type, logical Artifact ID, allocated Artifact revision, registered payload format, subject binding, source binding, and exact payload bytes. Operational response metadata such as `request_id`, `idempotency_key`, `result_id`, repository path, and status is not immutable Artifact metadata and is excluded. This preserves identical content identity independent of retry identifiers while ensuring that a metadata or payload change changes `content_hash`. No unrequested normalization may occur before either hash is computed.
+
+### Artifact Reference
+
+An Artifact Reference is the complete bookmark for one persisted canonical Artifact revision. Every Development Harness Artifact Reference has exactly these required fields:
+
+| Field | Meaning and required validation |
+| --- | --- |
+| `reference_schema_version` | Closed contract version for interpreting and validating the Reference. |
+| `artifact_type` | Registered type, independently represented rather than parsed from the path. |
+| `logical_artifact_id` | Logical series identity, independently represented rather than parsed from the path. |
+| `artifact_revision` | Positive allocated revision for this immutable member, independently represented rather than parsed from the path. |
+| `subject_binding` | Complete registered subject-binding variant copied from the verified immutable envelope. |
+| `repository_path` | Repository-relative location derived by the selected Path Policy; it must begin below Artifact Root and is never identity by itself. |
+| `payload_hash` | SHA-256 of the exact stored payload bytes. |
+| `content_hash` | SHA-256 of the canonical immutable Artifact envelope. |
+| `payload_format` | Registered canonical format identifier; it must match `artifact_type` and the path extension. |
+| `path_policy_version` | Exact accepted Path Policy version used to derive and later re-derive `repository_path`. |
+
+No separate `reference_id` is required because the tuple of `artifact_type`, `logical_artifact_id`, `artifact_revision`, and `content_hash` is the immutable identity. No `created_from_request_id` is required because request tracing does not identify the Artifact and must not make otherwise identical content request-dependent. The corresponding Write Result provides request binding.
+
+A reader must validate all Reference fields before returning canonical content. It must:
+
+1. validate the Reference shape and closed versions;
+2. validate `artifact_type`, logical ID, revision, format, and the complete `subject_binding` independently of the path;
+3. re-derive the only allowed repository path from those identity fields and `path_policy_version`, then require exact equality with `repository_path`;
+4. resolve the real Repository Root and Artifact Root, reject absolute paths, traversal, invalid separators, symlinks escaping the root, and any normalized or resolved location outside Artifact Root;
+5. require the registered extension and content format for the type;
+6. read the exact bytes and verify `payload_hash`;
+7. reconstruct the canonical immutable envelope from independently validated metadata and exact bytes, then verify `content_hash`; and
+8. require the envelope's Artifact revision and subject binding to equal the Reference values.
+
+Failure of any check is fail closed. A reader must not trust `repository_path` alone, parse identity from it, accept an unverified hash supplied beside it, or fall back to a fixed filename or filesystem current pointer. Both hashes are required; `payload_hash` detects byte changes directly and `content_hash` proves the bytes and immutable metadata belong to the identified Artifact.
+
+### Write Result
+
+A Write Result reports only the Artifact persistence operation. It does not report State update, workflow completion, orphan status, release readiness, or repository publication.
+
+Every Write Result has these common required fields:
+
+| Field | Meaning |
+| --- | --- |
+| `result_schema_version` | Closed contract version for interpreting the result. |
+| `result_id` | Globally unique immutable identifier for this result record. |
+| `request_id` | Exact `request_id` of the processed Write Request. |
+| `idempotency_key` | Exact `idempotency_key` of the processed Write Request. |
+| `request_fingerprint` | Verified fingerprint of the processed Write Request, binding the result to its meaning-bearing inputs. |
+| `status` | Exactly one of `written`, `already_written`, `blocked`, or `failed`. |
+
+Status meanings and status-specific required fields are exclusive:
+
+| Status | Meaning | Required status-specific fields | Forbidden status-specific fields |
+| --- | --- | --- | --- |
+| `written` | A newly allocated revision was created, its exact stored bytes and immutable envelope were verified, and its Reference can be returned. | `artifact_reference` | `error_code`, `error_message` |
+| `already_written` | The same verified request, or the same allocated Artifact identity and content hash, already resolved to a fully verified existing Artifact. No new write occurred and its existing Reference is returned. | `artifact_reference` | `error_code`, `error_message` |
+| `blocked` | Persistence was refused because input, identity, concurrency, binding, Path Policy, content, safety precondition, or idempotency evidence violated the contract or was missing, unknown, stale, or inconsistent. The request is not eligible for the attempted write unless the cause is corrected or a fresh valid request is made. | `error_code`, `error_message` | `artifact_reference` |
+| `failed` | A contract-valid and eligible persistence attempt encountered an execution failure such as an I/O, permission, capacity, or unavailable-filesystem error. The status does not claim that a canonical Artifact was verified. | `error_code`, `error_message` | `artifact_reference` |
+
+`blocked` is a deterministic refusal based on an unmet contract or safety condition. Retrying the identical request without changing the conflicting condition must not turn it into `written`. `failed` is an operational failure after eligibility was established; an identical retry may succeed when the external failure is removed. Unknown classification fails closed as `failed` only when contract validation passed and the operational outcome cannot be verified; otherwise it is `blocked`.
+
+`error_code` is a closed machine-readable code and is the primary error discriminator. `error_message` is a required safe Human-readable summary of that code, not the sole basis for handling. Neither field nor any other Result field may contain payload bytes, raw source, secrets, credentials, private or personal information, raw exception text, stack traces, absolute paths, hash values, or complete Tool output. Error details may identify only safe contract field names, registered identifiers, repository-relative derived paths when safe, and sanitized failure categories.
+
+The following fields and equivalents are forbidden in every Write Result:
+
+```text
+state_updated
+workflow_completed
+orphaned
+release_ready
+publish_succeeded
+```
+
+The Writer does not know or decide these facts. A `written` or `already_written` result says nothing about whether State later references the Artifact. The update order, an unverified-write recovery classification, and the final transaction boundary remain deferred.
+
+### Binding and Idempotency
+
+The Persistence Orchestrator verifies `payload_hash`, then recomputes and verifies `request_fingerprint` before processing. It binds `request_id` and `idempotency_key` to that fingerprint. Reuse of either identifier with a different fingerprint, or reuse of an idempotency key with a different request ID, is `blocked`. Neither last-writer-wins nor identifier rebinding is permitted.
+
+For an exact retry, identifier and fingerprint binding is resolved before evaluating whether the original `expected_latest` still describes the post-write series. A previously verified successful result is replayed as `already_written`; the changed latest revision caused by that same successful request is not treated as a stale-write conflict. If no verified successful result exists, normal precondition validation applies. This semantic precedence does not decide atomic-write mechanics or the final transaction boundary.
+
+A `written` or `already_written` Result binds to the Request through the exact common `request_id`, `idempotency_key`, and `request_fingerprint`, and returns the complete Artifact Reference. A `blocked` or `failed` Result retains the same three bindings but returns no Reference. Result replay for the same verified Request must reproduce the same status and Reference when a verified successful result exists; it must not allocate another revision.
+
+Before returning `already_written`, persistence must verify the existing Reference, exact stored payload bytes, immutable envelope, both hashes, type, logical ID, revision, subject binding, format, and derived path. Equality of caller-supplied hashes alone is insufficient. A different request that reaches the same allocated identity and verified `content_hash` may return `already_written`; if identity matches but content hash does not, it must return `blocked` and must never overwrite.
+
+The minimum required outcome matrix is:
+
+| Case | Required status | Required code or result |
+| --- | --- | --- |
+| 1. First revision, `expected_latest.state: absent`, and no series exists | `written` | Reference to allocated revision 1 after full verification |
+| 2. Successor revision with both current expected revision and hash | `written` | Reference to the next allocated revision after full verification |
+| 3. Exact same Request is executed again | `already_written` | Same fully verified Reference; no new allocation or write |
+| 4. Same allocated identity and same verified content hash already exist | `already_written` | Existing fully verified Reference; no new write |
+| 5. Same logical identity and allocated revision exist with a different content hash | `blocked` | `artifact_identity_content_conflict` |
+| 6. Expected latest revision is stale or otherwise differs | `blocked` | `expected_latest_revision_mismatch` |
+| 7. Expected latest content hash differs | `blocked` | `expected_latest_content_hash_mismatch` |
+| 8. Subject binding is missing, unknown, stale, or inconsistent | `blocked` | `subject_binding_mismatch` |
+| 9. Supplied/recorded location differs from the Path Policy derivation, or containment/type/extension checks fail | `blocked` | `path_policy_mismatch` |
+| 10. Reconstructed canonical envelope does not match the claimed or recorded content hash | `blocked` | `content_hash_mismatch` |
+
+Case 9 does not authorize a Write Request to supply a location; it covers an existing target, persisted metadata, or Reference that conflicts with the Writer's independently derived path. For cases 6 and 7, the Persistence Orchestrator must evaluate both present-state preconditions and may report both closed error codes when both differ; it must never accept one matching value as sufficient. A filesystem error encountered only after all relevant contract checks pass is `failed`, with an operational code such as `filesystem_io_failure`, rather than any `blocked` code above.
+
+### Responsibility Boundary for These Contracts
+
+```text
+Skill
+  → may generate candidate Artifact content and meaning-bearing bindings
+  → does not choose path, extension, or revision
+  → does not change State
+
+Interface / Persistence Orchestrator
+  → constructs and validates the Write Request
+  → verifies subject binding against current State and authorized evidence
+  → verifies expected latest revision and hash
+  → allocates the next Artifact revision
+  → requests create-only persistence under Path Policy
+
+Artifact Writer
+  → validates the trusted persistence inputs produced at that boundary
+  → derives or verifies the Path Policy result
+  → rechecks create-only identity and revision preconditions
+  → persists and verifies exact bytes and the immutable envelope
+  → returns the Artifact Reference and Write Result through the Persistence Orchestrator
+  → does not change State
+```
+
+The Persistence Orchestrator remains the existing allocation and coordination responsibility; this decision introduces no new owner. The lower-level call boundary between it and the Artifact Writer is not a fourth public contract and is deferred to implementation design. Neither component may decide formal adoption, Human authorization, Workflow transition, security-scan ownership, State update order, or orphan classification.
 
 ## Status Update Owner Matrix
 
@@ -828,9 +1066,6 @@ The following remain future decisions:
 
 - Artifact-first versus State-first update ordering;
 - orphan Artifact policy;
-- required Artifact Write Request fields;
-- required Artifact Reference fields;
-- required Artifact Write Result fields;
 - security scan ownership;
 - atomic Writer behavior;
 - State persistence;
@@ -845,7 +1080,7 @@ The following remain future decisions:
 The next Artifact Persistence design decision is:
 
 ```text
-Required fields for Write Request, Artifact Reference, and Write Result
+Security scan ownership
 ```
 
-That decision must carry the registered type, derived repository path, revision and stale-write preconditions, content identity, subject binding, and persistence outcome without reopening the ownership, authorization, revision, or Path Policy decisions established here.
+That decision must not reopen the ownership, authorization, revision, Path Policy, or persistence boundary contract decisions established here. Artifact-versus-State update ordering, orphan policy, and the final transaction boundary remain deferred.
