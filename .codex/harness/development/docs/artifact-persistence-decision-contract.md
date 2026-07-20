@@ -282,6 +282,20 @@ Accepted Decision / ADR Decision Record
   → Readiness Evidence Reference
   → Human Authorization or Authorization Continuation Reference
   → Execute Handoff
+  → Agent-owned Repository Publish Result Reference
+```
+
+The final link is an external ownership boundary. The Repository Publish Agent generates, persists, and owns the formal state of the Repository Publish Result body. The Development Harness generates the Repository Publish Handoff and may retain only an Agent-owned Repository Publish Result Reference. It must not generate, modify, persist, or Git-manage the Result body. The future Reference contract may carry `owner`, `result_id`, `result_revision`, `content_hash`, and `location_reference`, but this decision does not define a Reference Schema or State field and does not register `repository_publish_result_reference` as a Development Harness Artifact type.
+
+The following is conceptual only:
+
+```yaml
+repository_publish_result_reference:
+  owner: repository_publish_agent
+  result_id: string
+  result_revision: integer
+  content_hash: string
+  location_reference: string
 ```
 
 Every Artifact Reference in this chain identifies at least:
@@ -413,7 +427,9 @@ When continuation conditions fail, no continuation record may be created. The ol
 
 Re-reviewing unchanged Plan or implementation content does not change the subject revision. It creates a new Review Artifact revision in the relevant Review series. Changing the Plan creates a new Plan Artifact revision and makes prior Plan Review and Design Lock evidence stale for that new revision.
 
-ADR content and Human Decision status are also separate: changing an ADR's prose or metadata creates a new ADR Artifact revision, while accept, reject, or defer is recorded in an immutable Decision Record bound to the Decision revision and hash. Approval is never implemented by editing status inside the persisted ADR revision.
+ADR content and Human Decision status are also separate. The ADR Artifact contains the Decision background, problem, options, rationale, and technical content. Its `status` describes only the document lifecycle and is limited to `draft`, `proposed`, or `superseded`; `accepted`, `rejected`, and `deferred` are forbidden ADR lifecycle values. Changing ADR prose, metadata, or lifecycle status creates a new ADR Artifact revision.
+
+Human accept, reject, or defer is recorded only in an immutable `decision_record` bound to the Decision revision and hash. When an ADR carries the Decision content, the record must also bind to and verify the subject ADR logical ID, ADR revision, and ADR content hash. An ADR revision and its `decision_record` belong to separate revision domains. Editing an ADR body to say `accepted` does not pass the Human Gate, and an ADR without a valid `decision_record` must not enter the Accepted Decision Set. ADR lifecycle status is never a substitute for Human Decision status. The current ADR Template body is outside this change's scope; when that Template contract is implemented, a Schema or validator must enforce the lifecycle vocabulary.
 
 ### Superseded Artifacts
 
@@ -477,7 +493,7 @@ The repository-relative Artifact Root is fixed as:
 .codex/harness/development/artifacts/
 ```
 
-All canonical revisioned Artifacts governed by the Development Harness, including downstream evidence that it references, must be stored below this root according to the registered type pattern. A repository-relative Artifact Reference includes this full path. An absolute path, a path outside the repository, `..`, an empty segment, a backslash separator, or any normalized or symlink-resolved destination outside Artifact Root is invalid.
+All canonical revisioned Artifacts owned by the Development Harness must be stored below this root according to the registered type pattern. Externally owned result bodies are not stored below this root merely because the Harness retains a reference to them. A repository-relative Artifact Reference for a Development Harness Artifact includes this full path. An absolute path, a path outside the repository, `..`, an empty segment, a backslash separator, or any normalized or symlink-resolved destination outside Artifact Root is invalid.
 
 Artifact Root itself must resolve inside the real Repository Root. A Skill, model response, Human-supplied title, or other untrusted input cannot supply a target path.
 
@@ -487,14 +503,14 @@ Artifact Root itself must resolve inside the real Repository Root. A Skill, mode
 | --- | --- | --- |
 | Decision Artifact | Preserve important Decision content, rationale, selection, and Human disposition evidence | `adr`, `decision_record`, `authorization_grant`, `authorization_continuation`, `authorization_revocation` |
 | Planning Artifact | Concretize accepted Decisions and prove Plan readiness | `plan`, `plan_review`, `design_review`, `guardrail_validation`, `design_lock`, `readiness_evidence` |
-| Execution Evidence | Prove implementation review, correction need, release eligibility, and repository-publish handoff/result | `implementation_review`, `release_gate`, `fix_request`, `repository_publish_handoff`, `repository_publish_result` |
+| Execution Evidence | Prove implementation review, correction need, release eligibility, and repository-publish handoff | `implementation_review`, `release_gate`, `fix_request`, `repository_publish_handoff` |
 | Convenience View | Optional regenerated Human-readable display; never canonical evidence | No registered canonical type in the initial implementation |
 
 `decision_record` is the single structured type for Human accept, reject, or defer actions, including an ADR decision. Separate `adr_decision_record` and `human_decision_record` types are not registered because they would duplicate that responsibility. Generic ambiguous types such as `review` are also prohibited; Plan, design, and implementation reviews remain distinct.
 
 Authorization records are classified with Decision evidence because they preserve Human delegation or its derived continuation/revocation. They remain distinct registered types because their provenance and transition semantics differ.
 
-`repository_publish_result` is produced and formally owned by the Repository Publish Agent. Its inclusion in this registry defines how the Development Harness may reference the downstream result without copying Git publication fields into Execution State or taking ownership of publication.
+The Agent-owned Repository Publish Result body and its future external Reference are outside this registry. Retaining an external Result Reference does not transfer content, persistence, formal-state, or Git-management ownership to the Development Harness.
 
 ### Closed Artifact Type and Format Registry
 
@@ -514,7 +530,6 @@ Artifact type is a closed enum, not a free string. Each type has one canonical f
 | `release_gate` | Markdown | `.md` | Release Gate Skill |
 | `fix_request` | JSON | `.json` | Review or Gate workflow decision owner |
 | `repository_publish_handoff` | JSON | `.json` | Execute Interface |
-| `repository_publish_result` | JSON | `.json` | Repository Publish Agent |
 | `authorization_grant` | JSON | `.json` | Interface recording a Human Action |
 | `authorization_continuation` | JSON | `.json` | Harness compatibility aggregation |
 | `authorization_revocation` | JSON | `.json` | Interface recording Human Action or material Safety Guard |
@@ -560,7 +575,6 @@ The following patterns are canonical. Every shown path is relative to the reposi
 | `release_gate` | `.codex/harness/development/artifacts/release-gates/{subject_implementation_id}/implementation-r{subject_revision}/gate-r{artifact_revision}.md` |
 | `fix_request` | `.codex/harness/development/artifacts/fix-requests/{subject_implementation_id}/implementation-r{subject_revision}/request-r{artifact_revision}.json` |
 | `repository_publish_handoff` | `.codex/harness/development/artifacts/repository-publish-handoffs/{subject_implementation_id}/implementation-r{subject_revision}/handoff-r{artifact_revision}.json` |
-| `repository_publish_result` | `.codex/harness/development/artifacts/repository-publish-results/{subject_implementation_id}/implementation-r{subject_revision}/result-r{artifact_revision}.json` |
 | `authorization_grant` | `.codex/harness/development/artifacts/authorizations/{subject_plan_id}/plan-r{subject_revision}/grant-r{artifact_revision}.json` |
 | `authorization_continuation` | `.codex/harness/development/artifacts/authorizations/{subject_plan_id}/plan-r{subject_revision}/continuation-r{artifact_revision}.json` |
 | `authorization_revocation` | `.codex/harness/development/artifacts/authorizations/{subject_plan_id}/plan-r{subject_revision}/revocation-r{artifact_revision}.json` |
@@ -581,7 +595,6 @@ implementation-reviews/
 release-gates/
 fix-requests/
 repository-publish-handoffs/
-repository-publish-results/
 authorizations/
 ```
 
@@ -603,13 +616,13 @@ User input may propose a display title but is never copied into a logical ID. Th
 
 ### Revision Path Representation
 
-Every Artifact and subject revision path token uses a lowercase `r` and at least four decimal digits:
+Every Artifact and subject revision path segment uses a lowercase `r` and at least four decimal digits. Validation must apply this regular expression as a complete match to the revision segment alone:
 
 ```regex
-r[0-9]{4,}
+^r[0-9]{4,}$
 ```
 
-Examples are `r0001`, `r0002`, and `r10000`. Revisions are positive integers; `r0000`, signs, decimals, hexadecimal, and timestamps are invalid. The same representation is used for all Artifact types. A future implementation must reject values that cannot be represented safely rather than truncate or wrap them.
+For example, the revision segment is `r0004`, while a Markdown filename containing it is `r0004.md`. Examples of valid segments are `r0001`, `r0002`, and `r10000`. Revisions are positive integers only. `r0000`, leading signs, whitespace, decimals, hexadecimal, and timestamps or timestamp substitution are invalid. The same representation is used for all Artifact types. Partial-match validation is forbidden. A future implementation must reject values that cannot be represented safely rather than truncate or wrap them, and must never reuse a past revision number.
 
 ### Status and Hash Separation
 
@@ -628,6 +641,22 @@ This preserves readable, stable identity paths while hash verification detects c
 
 Fixed files such as `PLAN.md`, `DESIGN_LOCK.md`, `REVIEW.md`, and `RELEASE_GATE.md` are never canonical Artifact References. The initial implementation will not generate Convenience Views.
 
+Before the new Artifact Persistence implementation or any new Artifact Writer is enabled, every existing fixed-path field and fixed-path identity use must migrate to a revisioned Artifact Reference. The migration contract is:
+
+- fixed-path strings must not be used as new canonical References, and every existing fixed-path field is a migration target;
+- fixed paths and Artifact References must not be dual-written after Artifact References are introduced;
+- a Convenience View is not a substitute for an Artifact Reference;
+- the Execute Interface must not trust a fixed path as canonical identity;
+- Human Authorization must not bind only to a fixed path;
+- Review and Design Lock must not identify their subject Plan by fixed path alone;
+- the new Artifact Writer must remain disabled until this migration is complete;
+- any mismatch between a legacy fixed path and a new Artifact Reference fails closed;
+- existing fixed-path content must not be promoted automatically to a formal Artifact;
+- migration requires validation of existing content and Human Review; and
+- after migration, canonical identity is determined only by the Artifact Reference held in State.
+
+This contract does not implement the related Schema, Runtime, Workflow, State field, or migration tooling.
+
 A future Convenience View may be generated only from a canonical revisioned Artifact, must be reproducible, must state that it is non-canonical and manually uneditable, and must never bind State, Human Authorization, Review, Design Lock, Execute Handoff, or repository publication. View generation or refresh failure cannot corrupt canonical evidence and does not by itself invalidate an otherwise valid Workflow transition.
 
 Template paths are also not Artifact paths:
@@ -639,11 +668,11 @@ Template paths are also not Artifact paths:
 
 The existing `PLAN.md`, `DESIGN_LOCK.md`, `REVIEW.md`, and `RELEASE_GATE.md` Templates correspond to `plan`, `design_lock`, `implementation_review`, and `release_gate`. The current `REVIEW.md` is specifically an Implementation Review Template; it does not govern `plan_review` or `design_review`. Those two Markdown types require future type-specific structured Markdown contracts or Templates before persistence implementation. JSON types require their future JSON Schema.
 
-The current `ADR.md` Template contains a mutable-looking `status` field. Under this accepted policy, that field cannot serve as Human accept/reject/defer evidence or trigger a status-based path. Before ADR persistence is implemented, the Template contract must be aligned so Human disposition exists only in `decision_record`; this design commit does not modify the Template.
+The current `ADR.md` Template contains a mutable-looking `status` field. Under this accepted policy, that field can express only the `draft`, `proposed`, or `superseded` document lifecycle and cannot serve as Human accept/reject/defer evidence or trigger a status-based path. Before ADR persistence is implemented, the Template contract must be aligned so Human disposition exists only in `decision_record`, with the vocabulary restriction enforced by Schema or validator; this design commit does not modify the Template itself.
 
 ### Current Reference Policy
 
-The filesystem has no canonical `current.json`, `latest` symlink, fixed-path copy, or other current pointer. Current Artifact References are owned only by the relevant Workflow State. Development Execution State keeps only its permitted downstream reference to Repository Publish Agent results; it does not absorb that Agent's publication State. This avoids a second mutable source of truth and prevents a filesystem pointer from diverging from State.
+The filesystem has no canonical `current.json`, `latest` symlink, fixed-path copy, or other current pointer. Current Development Harness Artifact References are owned only by the relevant Workflow State. Development Execution State may eventually keep only an external, Agent-owned Repository Publish Result Reference; it does not store the Result body or absorb that Agent's publication State. The Reference Schema and State field are deferred. This avoids a second mutable source of truth and prevents a filesystem pointer from diverging from State.
 
 ### Symlink and Containment Policy
 
@@ -661,7 +690,7 @@ Writing through a symlink to another repository, a home directory, or any locati
 
 ### Git Management Policy
 
-Canonical Decision, Planning, Execution Evidence, and Authorization Artifacts under Artifact Root are Git-managed in the initial local single-repository model. This includes the downstream `repository_publish_result` Artifact while leaving its content and formal ownership with Repository Publish Agent.
+Canonical Decision, Planning, Execution Evidence, and Authorization Artifacts owned by the Development Harness under Artifact Root are Git-managed in the initial local single-repository model. The Repository Publish Result body is Agent-owned, is not a Development Harness Artifact, and must not be stored under Artifact Root or Git-managed by the Development Harness.
 
 Temporary files, lock files, partial or failed writes, temporary scan results, raw source, secrets, credentials, private or personal information, complete conversations, complete Tool output, and unnecessary intermediate candidates must never be staged or committed. This decision does not modify `.gitignore`; future Writer storage for transient material must be outside canonical Artifact paths and comply with the security boundary before any Git operation.
 
@@ -767,6 +796,8 @@ The Artifact Writer must not resolve or waive Decision Drift.
 | Repository Publish Handoff | `create-repository-publish-handoff` under the Execute Interface | Future Artifact Writer | Passed Release Gate and Runtime Guards |
 
 Persisted candidates remain candidates. Review and Gate Artifacts remain records of evaluation. They do not replace the Plan, Design Lock, accepted Decisions, implementation diff, or repository as their respective sources of truth.
+
+The Repository Publish Result is deliberately excluded from this Development Harness ownership matrix. The Repository Publish Agent generates and persists its body and owns its formal state. The Development Harness owns only the Handoff and may retain a future Agent-owned Result Reference without generating, changing, saving, or Git-managing the Result body.
 
 ## Responsibilities Denied to the Artifact Writer
 
