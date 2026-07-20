@@ -8,6 +8,7 @@ required:
   - candidate_id
   - artifact_type
   - logical_artifact_id
+  - candidate_revision
   - artifact_lifecycle_status
   - payload_hash
   - payload_format
@@ -22,6 +23,8 @@ properties:
     $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
   logical_artifact_id:
     $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  candidate_revision:
+    $ref: "./revision-domains.schema.yaml#/$defs/candidate_revision"
   artifact_lifecycle_status:
     type: string
     enum: [candidate, draft, proposed, superseded]

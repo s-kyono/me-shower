@@ -1,0 +1,125 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/artifact-revision-allocation-request.schema.yaml"
+title: "Artifact Revision Allocation Request"
+type: object
+additionalProperties: false
+required:
+  - allocation_schema_version
+  - allocation_record_id
+  - requested_by
+  - artifact_type
+  - logical_artifact_id
+  - candidate_id
+  - candidate_revision
+  - candidate_payload_hash
+  - candidate_identity_hash
+  - expected_latest
+  - revision_binding
+  - allocation_request_fingerprint
+properties:
+  allocation_schema_version:
+    const: "1.0"
+  allocation_record_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  requested_by:
+    $ref: "./canonicality-common.schema.yaml#/$defs/source_identity"
+  artifact_type:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  logical_artifact_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  candidate_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  candidate_revision:
+    $ref: "./revision-domains.schema.yaml#/$defs/candidate_revision"
+  candidate_payload_hash:
+    $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+  candidate_identity_hash:
+    $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+  expected_latest:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [state]
+        properties:
+          state:
+            const: absent
+      - type: object
+        additionalProperties: false
+        required: [state, artifact_revision, content_hash]
+        properties:
+          state:
+            const: present
+          artifact_revision:
+            $ref: "./revision-domains.schema.yaml#/$defs/artifact_revision"
+          content_hash:
+            $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+  revision_binding:
+    $ref: "#/$defs/revision_binding"
+  allocation_request_fingerprint:
+    $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+$defs:
+  revision_binding:
+    type: object
+    oneOf:
+      - $ref: "#/$defs/plan_binding"
+      - $ref: "#/$defs/plan_subject_binding"
+      - $ref: "#/$defs/implementation_subject_binding"
+      - $ref: "#/$defs/decision_binding"
+      - $ref: "#/$defs/authorization_binding"
+      - $ref: "#/$defs/repository_handoff_binding"
+  plan_binding:
+    type: object
+    additionalProperties: false
+    required: [binding_type, accepted_decision_set_hash]
+    properties:
+      binding_type: {const: plan}
+      accepted_decision_set_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+  plan_subject_binding:
+    type: object
+    additionalProperties: false
+    required: [binding_type, subject_plan_logical_artifact_id, subject_revision, subject_content_hash, accepted_decision_set_hash]
+    properties:
+      binding_type: {const: plan_subject}
+      subject_plan_logical_artifact_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+      subject_revision: {$ref: "./revision-domains.schema.yaml#/$defs/subject_revision"}
+      subject_content_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+      accepted_decision_set_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+  implementation_subject_binding:
+    type: object
+    additionalProperties: false
+    required: [binding_type, subject_implementation_logical_artifact_id, implementation_revision, repository_snapshot_hash]
+    properties:
+      binding_type: {const: implementation_subject}
+      subject_implementation_logical_artifact_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+      implementation_revision: {$ref: "./revision-domains.schema.yaml#/$defs/subject_revision"}
+      repository_snapshot_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+  decision_binding:
+    type: object
+    additionalProperties: false
+    required: [binding_type, decision_revision, decision_content_hash]
+    properties:
+      binding_type: {const: decision}
+      decision_revision: {$ref: "./revision-domains.schema.yaml#/$defs/decision_revision"}
+      decision_content_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+  authorization_binding:
+    type: object
+    additionalProperties: false
+    required: [binding_type, authorization_revision, authorized_plan_revision, authorized_plan_content_hash, accepted_decision_set_hash]
+    properties:
+      binding_type: {const: authorization}
+      authorization_revision: {$ref: "./revision-domains.schema.yaml#/$defs/authorization_revision"}
+      authorized_plan_revision: {$ref: "./revision-domains.schema.yaml#/$defs/subject_revision"}
+      authorized_plan_content_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+      accepted_decision_set_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+  repository_handoff_binding:
+    type: object
+    additionalProperties: false
+    required: [binding_type, accepted_decision_set_hash, subject_plan_logical_artifact_id, subject_revision, subject_content_hash, implementation_revision, repository_snapshot_hash]
+    properties:
+      binding_type: {const: repository_handoff}
+      accepted_decision_set_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+      subject_plan_logical_artifact_id: {$ref: "./canonicality-common.schema.yaml#/$defs/identifier"}
+      subject_revision: {$ref: "./revision-domains.schema.yaml#/$defs/subject_revision"}
+      subject_content_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}
+      implementation_revision: {$ref: "./revision-domains.schema.yaml#/$defs/subject_revision"}
+      repository_snapshot_hash: {$ref: "./canonicality-common.schema.yaml#/$defs/sha256"}

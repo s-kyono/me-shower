@@ -6,6 +6,7 @@ additionalProperties: false
 required:
   - decision_schema_version
   - decision_record_id
+  - decision_revision
   - artifact_type
   - logical_artifact_id
   - candidate_id
@@ -21,6 +22,8 @@ properties:
     const: "1.0"
   decision_record_id:
     $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  decision_revision:
+    $ref: "./revision-domains.schema.yaml#/$defs/decision_revision"
   artifact_type:
     $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
   logical_artifact_id:

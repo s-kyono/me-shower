@@ -1,0 +1,53 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/revision-domain-value.schema.yaml"
+title: "Explicit Revision Domain Value"
+oneOf:
+  - $ref: "#/$defs/artifact"
+  - $ref: "#/$defs/candidate"
+  - $ref: "#/$defs/subject"
+  - $ref: "#/$defs/state"
+  - $ref: "#/$defs/decision"
+  - $ref: "#/$defs/authorization"
+$defs:
+  artifact:
+    type: object
+    additionalProperties: false
+    required: [revision_domain, artifact_revision]
+    properties:
+      revision_domain: {const: artifact_revision}
+      artifact_revision: {$ref: "./revision-domains.schema.yaml#/$defs/artifact_revision"}
+  candidate:
+    type: object
+    additionalProperties: false
+    required: [revision_domain, candidate_revision]
+    properties:
+      revision_domain: {const: candidate_revision}
+      candidate_revision: {$ref: "./revision-domains.schema.yaml#/$defs/candidate_revision"}
+  subject:
+    type: object
+    additionalProperties: false
+    required: [revision_domain, subject_revision]
+    properties:
+      revision_domain: {const: subject_revision}
+      subject_revision: {$ref: "./revision-domains.schema.yaml#/$defs/subject_revision"}
+  state:
+    type: object
+    additionalProperties: false
+    required: [revision_domain, state_revision]
+    properties:
+      revision_domain: {const: state_revision}
+      state_revision: {$ref: "./revision-domains.schema.yaml#/$defs/state_revision"}
+  decision:
+    type: object
+    additionalProperties: false
+    required: [revision_domain, decision_revision]
+    properties:
+      revision_domain: {const: decision_revision}
+      decision_revision: {$ref: "./revision-domains.schema.yaml#/$defs/decision_revision"}
+  authorization:
+    type: object
+    additionalProperties: false
+    required: [revision_domain, authorization_revision]
+    properties:
+      revision_domain: {const: authorization_revision}
+      authorization_revision: {$ref: "./revision-domains.schema.yaml#/$defs/authorization_revision"}

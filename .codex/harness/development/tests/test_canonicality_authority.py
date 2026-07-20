@@ -58,6 +58,7 @@ def candidate_factory(artifact_type: str = "plan", payload: bytes | None = None)
         "candidate_id": f"{artifact_type.replace('_', '-')}-candidate-1",
         "artifact_type": artifact_type,
         "logical_artifact_id": f"{artifact_type.replace('_', '-')}-main",
+        "candidate_revision": 3,
         "artifact_lifecycle_status": lifecycle,
         "payload_hash": hashlib.sha256(exact_payload).hexdigest(),
         "payload_format": "markdown",
@@ -94,6 +95,7 @@ def decision_record_factory(candidate, authority, decision_value: str | None = N
     record = {
         "decision_schema_version": "1.0",
         "decision_record_id": record_id or f"decision-{candidate['candidate_id']}",
+        "decision_revision": 2,
         "artifact_type": candidate["artifact_type"],
         "logical_artifact_id": candidate["logical_artifact_id"],
         "candidate_id": candidate["candidate_id"],

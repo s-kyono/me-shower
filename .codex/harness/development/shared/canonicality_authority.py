@@ -22,11 +22,17 @@ RESERVED_CANDIDATE_FIELDS = {
     "status", "canonical", "canonical_status", "canonical_decision",
     "canonicality_authority", "authority_identity", "accepted", "locked",
     "passed", "artifact_written", "workflow_status",
+    "revision", "artifact_revision", "new_artifact_revision",
+    "target_artifact_revision", "revision_path_segment", "content_hash",
 }
 PAYLOAD_CANONICAL_FIELDS = {
     "canonical", "canonical_status", "canonical_decision", "canonicality_authority",
     "authority_identity", "approval_status", "submitted_by", "submitted_at",
     "actor_identity",
+}
+PAYLOAD_FORBIDDEN_REVISION_FIELDS = {
+    "revision", "artifact_revision", "new_artifact_revision",
+    "target_artifact_revision", "revision_path_segment",
 }
 CANONICAL_VALUES = {
     "accepted", "rejected", "deferred", "locked", "passed", "failed",
@@ -120,6 +126,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 def _load_validators() -> tuple[dict[str, Any], dict[str, Any]]:
     names = (
+        "revision-domains.schema.yaml",
         "canonicality-common.schema.yaml", "artifact-candidate.schema.yaml",
         "canonicality-authority-record.schema.yaml",
         "canonicality-decision-record.schema.yaml",
@@ -218,6 +225,8 @@ def _contains_canonical_payload_field(
         for raw_key, child in value.items():
             key = str(raw_key).lower()
             if key in PAYLOAD_CANONICAL_FIELDS:
+                return True
+            if key in PAYLOAD_FORBIDDEN_REVISION_FIELDS:
                 return True
             if key == "status" and isinstance(child, str) and (
                 child.lower() in CANONICAL_VALUES or child.lower() in type_values

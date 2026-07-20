@@ -29,8 +29,8 @@ properties:
       - id
       - epic_id
       - artifact_lifecycle_status
-      - revision
-      - plan_revision
+      - candidate_revision
+      - subject_plan_revision
       - created_at
     properties:
       id:
@@ -44,12 +44,10 @@ properties:
         enum:
           - candidate
           - superseded
-      revision:
-        type: integer
-        minimum: 1
-      plan_revision:
-        type: integer
-        minimum: 1
+      candidate_revision:
+        $ref: "./revision-domains.schema.yaml#/$defs/candidate_revision"
+      subject_plan_revision:
+        $ref: "./revision-domains.schema.yaml#/$defs/subject_revision"
       created_at:
         type: string
         format: date-time

@@ -2,8 +2,8 @@
 design_lock_id: "{{ design_lock_id }}"
 epic_id: "{{ epic_id }}"
 artifact_lifecycle_status: "{{ candidate | superseded }}"
-revision: {{ revision }}
-plan_revision: {{ plan_revision }}
+candidate_revision: {{ candidate_revision }}
+subject_plan_revision: {{ subject_plan_revision }}
 created_at: "{{ created_at }}"
 ---
 

@@ -43,8 +43,7 @@ $defs:
           subject_id:
             $ref: "#/$defs/identifier"
           subject_revision:
-            type: integer
-            minimum: 1
+            $ref: "./revision-domains.schema.yaml#/$defs/subject_revision"
           subject_hash:
             $ref: "#/$defs/sha256"
   actor_identity:

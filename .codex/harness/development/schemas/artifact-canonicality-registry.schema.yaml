@@ -3,10 +3,17 @@ $id: "https://me-shower.local/schemas/artifact-canonicality-registry.schema.yaml
 title: "Development Artifact Canonicality Registry"
 type: object
 additionalProperties: false
-required: [schema_version, artifact_types]
+required: [schema_version, revision_allocation, artifact_types]
 properties:
   schema_version:
     const: "1.0"
+  revision_allocation:
+    type: object
+    additionalProperties: false
+    required: [allowed_allocator]
+    properties:
+      allowed_allocator:
+        $ref: "./canonicality-common.schema.yaml#/$defs/source_identity"
   artifact_types:
     type: object
     minProperties: 1
@@ -18,6 +25,7 @@ properties:
         - candidate_generators
         - artifact_lifecycle_statuses
         - subject_binding_policy
+        - revision_binding
         - canonicality
       properties:
         artifact_type:
@@ -37,6 +45,39 @@ properties:
         subject_binding_policy:
           type: string
           enum: [required, optional]
+        revision_binding:
+          type: object
+          additionalProperties: false
+          required: [binding_type, owned_revision_domains, required_bindings]
+          properties:
+            binding_type:
+              type: string
+              enum: [plan, plan_subject, implementation_subject, decision, authorization, repository_handoff]
+            owned_revision_domains:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items:
+                type: string
+                enum: [artifact_revision, decision_revision, authorization_revision]
+            required_bindings:
+              type: array
+              uniqueItems: true
+              items:
+                type: string
+                enum:
+                  - accepted_decision_set_hash
+                  - decision_revision
+                  - decision_content_hash
+                  - subject_plan_logical_artifact_id
+                  - subject_revision
+                  - subject_content_hash
+                  - implementation_revision
+                  - subject_implementation_logical_artifact_id
+                  - repository_snapshot_hash
+                  - authorization_revision
+                  - authorized_plan_revision
+                  - authorized_plan_content_hash
         canonicality:
           type: object
           additionalProperties: false

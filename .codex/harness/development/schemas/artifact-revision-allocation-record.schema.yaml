@@ -1,0 +1,90 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://me-shower.local/schemas/artifact-revision-allocation-record.schema.yaml"
+title: "Immutable Artifact Revision Allocation Record"
+type: object
+additionalProperties: false
+required:
+  - allocation_schema_version
+  - allocation_record_id
+  - artifact_type
+  - logical_artifact_id
+  - allocated_artifact_revision
+  - expected_latest
+  - observed_latest
+  - candidate_id
+  - candidate_revision
+  - candidate_payload_hash
+  - candidate_identity_hash
+  - revision_binding
+  - allocation_request_fingerprint
+  - allocation_status
+  - allocated_by
+  - allocated_at
+  - allocation_record_hash
+properties:
+  allocation_schema_version:
+    const: "1.0"
+  allocation_record_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  artifact_type:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  logical_artifact_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  allocated_artifact_revision:
+    $ref: "./revision-domains.schema.yaml#/$defs/artifact_revision"
+  expected_latest:
+    $ref: "#/$defs/expected_latest"
+  observed_latest:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [state]
+        properties:
+          state: {const: absent}
+      - type: object
+        additionalProperties: false
+        required: [state, artifact_revision, content_hash]
+        properties:
+          state: {const: present}
+          artifact_revision:
+            $ref: "./revision-domains.schema.yaml#/$defs/artifact_revision"
+          content_hash:
+            $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+  candidate_id:
+    $ref: "./canonicality-common.schema.yaml#/$defs/identifier"
+  candidate_revision:
+    $ref: "./revision-domains.schema.yaml#/$defs/candidate_revision"
+  candidate_payload_hash:
+    $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+  candidate_identity_hash:
+    $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+  revision_binding:
+    $ref: "./artifact-revision-allocation-request.schema.yaml#/$defs/revision_binding"
+  allocation_request_fingerprint:
+    $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+  allocation_status:
+    const: allocated
+  allocated_by:
+    $ref: "./canonicality-common.schema.yaml#/$defs/source_identity"
+  allocated_at:
+    type: string
+    format: date-time
+  allocation_record_hash:
+    $ref: "./canonicality-common.schema.yaml#/$defs/sha256"
+$defs:
+  expected_latest:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [state]
+        properties:
+          state: {const: absent}
+      - type: object
+        additionalProperties: false
+        required: [state, artifact_revision, content_hash]
+        properties:
+          state: {const: present}
+          artifact_revision:
+            $ref: "./revision-domains.schema.yaml#/$defs/artifact_revision"
+          content_hash:
+            $ref: "./canonicality-common.schema.yaml#/$defs/sha256"

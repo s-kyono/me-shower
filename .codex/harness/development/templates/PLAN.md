@@ -2,7 +2,7 @@
 plan_id: "{{ plan_id }}"
 title: "{{ title }}"
 artifact_lifecycle_status: "{{ candidate | superseded }}"
-revision: {{ revision }}
+candidate_revision: {{ candidate_revision }}
 created_at: "{{ created_at }}"
 updated_at: "{{ updated_at }}"
 base_branch: "{{ base_branch }}"
